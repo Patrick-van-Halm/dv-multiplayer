@@ -36,9 +36,12 @@ public class ItemUpdateData
     public bool AttachedFront  { get; set; }
     public ushort ContainerNetId { get; set; }
     public int ContainerSlot { get; set; } = -1;
+<<<<<<< HEAD
     public int InventorySlot { get; set; } = -1;
     public bool InLockedSlot { get; set; }
     public bool IsDropped { get; set; }
+=======
+>>>>>>> 64b64ddac4c01653a5f35094f35d4762e08207d6
     public Dictionary<string, object> States { get; set; }
 
     public void Serialize(NetDataWriter writer)
@@ -95,6 +98,7 @@ public class ItemUpdateData
                 writer.Put(ContainerNetId);
                 writer.Put(ContainerSlot);
             }
+<<<<<<< HEAD
 
             if (ItemState == ItemState.InHand ||
                 ItemState == ItemState.InInventory)
@@ -103,6 +107,8 @@ public class ItemUpdateData
                 writer.Put(InLockedSlot);
                 writer.Put(IsDropped);
             }
+=======
+>>>>>>> 64b64ddac4c01653a5f35094f35d4762e08207d6
         }
 
         if (UpdateType.HasFlag(ItemUpdateType.Create) || UpdateType.HasFlag(ItemUpdateType.ObjectState))
@@ -317,6 +323,7 @@ public class ItemUpdateData
                 ContainerNetId = reader.GetUShort();
                 ContainerSlot = reader.GetInt();
             }
+<<<<<<< HEAD
 
             if (ItemState == ItemState.InHand ||
                 ItemState == ItemState.InInventory)
@@ -325,6 +332,8 @@ public class ItemUpdateData
                 InLockedSlot = reader.GetBool();
                 IsDropped = reader.GetBool();
             }
+=======
+>>>>>>> 64b64ddac4c01653a5f35094f35d4762e08207d6
         }
 
         if (UpdateType.HasFlag(ItemUpdateType.Create) || UpdateType.HasFlag(ItemUpdateType.ObjectState))
