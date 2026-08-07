@@ -38,6 +38,31 @@ public struct PlayerItemSaveData
     public bool InLockedSlot { get; set; }
     public bool IsDropped { get; set; }
 
+    public static PlayerItemSaveData FromStorageItemData(
+        StorageItemData item)
+    {
+        return new PlayerItemSaveData
+        {
+            ItemPrefabName = item.itemPrefabName,
+            ItemPositionX = item.itemPositionX,
+            ItemPositionY = item.itemPositionY,
+            ItemPositionZ = item.itemPositionZ,
+            ItemRotationX = item.itemRotationX,
+            ItemRotationY = item.itemRotationY,
+            ItemRotationZ = item.itemRotationZ,
+            ItemRotationW = item.itemRotationW,
+            BelongsToPlayer = item.belongsToPlayer,
+            IsGrabbed = item.isGrabbed,
+            CarGuid = item.carGuid,
+            ContainerId = item.containerId,
+            State = item.state?.DeepClone() as JObject,
+            InventorySlotIndex = item.inventorySlotIndex,
+            ContainerSlotIndex = item.containerSlotIndex,
+            InLockedSlot = item.inLockedSlot,
+            IsDropped = item.isDropped,
+        };
+    }
+
     private Vector3 _position;
     public Vector3 Position
     {

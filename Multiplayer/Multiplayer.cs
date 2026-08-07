@@ -7,6 +7,7 @@ using MPAPI;
 using Multiplayer.API;
 using Multiplayer.Components.MainMenu;
 using Multiplayer.Components.Networking;
+using Multiplayer.Components.Debugging;
 using Multiplayer.Editor;
 using Multiplayer.Models;
 using Multiplayer.Patches.Mods;
@@ -56,6 +57,7 @@ public static class Multiplayer
     public static bool Load(UnityModManager.ModEntry modEntry)
     {
         ModEntry = modEntry;
+        LogAnywhere.StartCapture(ModEntry.Path);
         Settings = Settings.Load(modEntry);//Settings.Load<Settings>(modEntry);
         ModEntry.OnGUI = Settings.Draw;
         ModEntry.OnSaveGUI = Settings.Save;

@@ -13,9 +13,6 @@ public static class GraphicsOptionsPatch
     [HarmonyPostfix]
     private static void UpdateRunInBackground_Postfix(GraphicsOptions __instance)
     {
-        if (LoadingScreenManager.IsLoading)
-            return;
-
         if (!DvExtensions.AllowPause())
             Application.runInBackground = true;
     }

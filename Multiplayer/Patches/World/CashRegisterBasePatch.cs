@@ -1,7 +1,5 @@
 using DV.CashRegister;
-using DV.InventorySystem;
 using HarmonyLib;
-using Multiplayer.Components.Networking;
 using Multiplayer.Components.Networking.World;
 using Multiplayer.Utils;
 using System;
@@ -19,51 +17,23 @@ public class CashRegisterBasePatch
     [HarmonyPrefix]
     [HarmonyPatch(nameof(CashRegisterBase.AddCash))]
     private static bool AddCash(CashRegisterBase __instance, double amount)
-    {
-        if (__instance is not CashRegisterWithModules cashRegisterWithModules)
-            return true;
-
-        Multiplayer.LogDebug(() => $"AddCash() {__instance.GetObjectPath()}, Deposited: {amount}\r\n{Environment.StackTrace}");
-
-        if (!NetworkedCashRegisterWithModules.TryGet(cashRegisterWithModules, out var netCashRegister))
-        {
-            Multiplayer.LogWarning($"Attempting to AddCash, but NetworkedCashRegisterWithModules not found for {cashRegisterWithModules.GetObjectPath()}");
-            return true;
-        }
-
-        if (netCashRegister.IsShopRegister)
-            return true;
-
-        Inventory.Instance.AddMoney(amount);
-
-        CoroutineManager.Instance.StartCoroutine(netCashRegister.AddCash(amount));
-
-        return false;
-    }
+        => NetworkedCashRegisterRouting.RouteAddCash(
+            __instance,
+            amount);
 
     [HarmonyPrefix]
     [HarmonyPatch(nameof(CashRegisterBase.OnEnable))]
-    private static bool OnEnable(CashRegisterBase __instance)
-    {
-        //Multiplayer.LogDebug(() => $"CashRegisterBase.OnEnable({__instance.GetObjectPath()}) {__instance.GetType()}");
-        if (__instance is not CashRegisterWithModules)
-            return true;
-
-        return NetworkLifecycle.Instance.IsHost();
-    }
+    private static bool OnEnable(
+        CashRegisterBase __instance) =>
+        NetworkedCashRegisterRouting
+            .ShouldRunBaseEnable(__instance);
 
     [HarmonyPrefix]
     [HarmonyPatch(nameof(CashRegisterBase.OnDisable))]
-    private static bool OnDisable(CashRegisterBase __instance)
-    {
-        //Multiplayer.LogDebug(() => $"CashRegisterBase.OnDisable({__instance.GetObjectPath()}) {__instance.GetType()}");
-        if (__instance is not CashRegisterWithModules)
-            return true;
-
-        // Prevent clients from cancelling/returning cash on cash registers when loading the game or leaving the area
-        __instance.StopAllCoroutines();
-        return NetworkLifecycle.Instance.IsHost();
-    }
+    private static bool OnDisable(
+        CashRegisterBase __instance) =>
+        NetworkedCashRegisterRouting
+            .BeforeBaseDisable(__instance);
 }
 
 [HarmonyPatch]

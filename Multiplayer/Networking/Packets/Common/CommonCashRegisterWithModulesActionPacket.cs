@@ -10,11 +10,14 @@ public enum CashRegisterAction : byte
     RejectGeneric,
     RejectFunds,
     RejectedNoItems,
-    Approve
+    Approve,
+    SetCart,
+    AddCart,
 }
 public class CommonCashRegisterWithModulesActionPacket
 {
     public ushort NetId { get; set; }
     public CashRegisterAction Action { get; set; }
     public double Amount { get; set; }
+    public int ModuleIndex { get; set; } = -1;
 }

@@ -31,8 +31,49 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
         return cashRegisterToNetworkedCashRegister.TryGetValue(cashRegister, out networkedCashRegisterWithModules);
     }
 
+    public static IEnumerable<CommonCashRegisterWithModulesActionPacket>
+        CreateShopStateSnapshots()
+    {
+        foreach (NetworkedCashRegisterWithModules networked in
+                 cashRegisterToNetworkedCashRegister.Values
+                     .Distinct()
+                     .Where(candidate => candidate.IsShopRegister))
+        {
+            for (int index = 0;
+                 index < networked.CashRegister.registerModules.Length;
+                 index++)
+            {
+                if (networked.CashRegister.registerModules[index] is not
+                    ScanItemCashRegisterModule module)
+                {
+                    continue;
+                }
+
+                yield return
+                    new CommonCashRegisterWithModulesActionPacket
+                    {
+                        NetId = networked.NetId,
+                        Action = CashRegisterAction.SetCart,
+                        ModuleIndex = index,
+                        Amount = module.Data.unitsToBuy,
+                    };
+            }
+
+            yield return
+                new CommonCashRegisterWithModulesActionPacket
+                {
+                    NetId = networked.NetId,
+                    Action = CashRegisterAction.SetFunds,
+                    Amount =
+                        networked.CashRegister.DepositedCash,
+                };
+        }
+    }
+
     public static void InitialiseCashRegisters()
     {
+        NetworkedShopPurchaseOwnership.Clear();
+
         // Find all shop cash registers
         var shopRegisters = GlobalShopController.Instance.globalShopList
             .Select(shop => shop.cashRegister)
@@ -75,6 +116,7 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
     #region Client Variables
     public bool IsBusy => isBuying || isCancelling || isAddingCash || processingAction;
+    internal bool IsProcessingServerAction => processingAction;
     bool isBuying;
     bool isCancelling;
     bool isAddingCash;
@@ -145,8 +187,13 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
         bool success = false;
         CashRegisterAction response = CashRegisterAction.RejectGeneric;
 
-        NetworkLifecycle.Instance.Server?.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({player.Username}, {packet.Action}, {packet.Amount})");
-        if (transform.PlayerCanReach(player, 1))
+        NetworkLifecycle.Instance.Server?.LogDebug(
+            () =>
+                $"NetworkedCashRegisterWithModules.Server_ProcessAction(" +
+                $"{player.Username}, {packet?.Action}, {packet?.Amount})");
+        if (packet != null &&
+            Enum.IsDefined(typeof(CashRegisterAction), packet.Action) &&
+            transform.PlayerCanReach(player, 1))
         {
             processingAction = true;
             switch (packet.Action)
@@ -161,7 +208,13 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
                     Multiplayer.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({packet.Action}) Player Money: {Inventory.Instance.PlayerMoney}, TotalCost: {CashRegister.GetTotalCost()}, TotalUnitsInBasket: {CashRegister.TotalUnitsInBasket()}");
 
-                    if (CashRegister.TotalUnitsInBasket() <= 0)
+                    List<ShopPurchaseLine> purchase = null;
+                    if (IsShopRegister &&
+                        !TryCaptureShopPurchase(out purchase))
+                    {
+                        response = CashRegisterAction.RejectedNoItems;
+                    }
+                    else if (CashRegister.TotalUnitsInBasket() <= 0)
                     {
                         response = CashRegisterAction.RejectedNoItems;
                     }
@@ -172,6 +225,16 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
                     else
                     {
                         success = CashRegister?.Buy() ?? false;
+                        if (success && IsShopRegister)
+                        {
+                            foreach (ShopPurchaseLine line in purchase)
+                            {
+                                NetworkedShopPurchaseOwnership.Enqueue(
+                                    line.PrefabName,
+                                    line.Count,
+                                    player.PlayerId);
+                            }
+                        }
                     }
 
                     Multiplayer.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({packet.Action}, {packet.Amount}) Response: {response}, Buy success: {success}, Player Money: {Inventory.Instance.PlayerMoney}, TotalCost: {CashRegister.GetTotalCost()}, TotalUnitsInBasket: {CashRegister.TotalUnitsInBasket()}");
@@ -213,6 +276,27 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
                 case CashRegisterAction.SetFunds:
                     //NetworkLifecycle.Instance.Server?.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({player.Username}, {packet.Action}, {packet.Amount}) Wallet: {Inventory.Instance.PlayerMoney}");
                     break;
+
+                case CashRegisterAction.SetCart:
+                    break;
+
+                case CashRegisterAction.AddCart:
+                    success = TryAddShopCart(packet);
+                    if (!success &&
+                        TryGetShopModule(
+                            packet.ModuleIndex,
+                            out ScanItemCashRegisterModule cartModule))
+                    {
+                        packet.Action = CashRegisterAction.SetCart;
+                        packet.Amount = cartModule.Data.unitsToBuy;
+                        NetworkLifecycle.Instance.Server
+                            .SendCashRegisterAction(
+                                packet,
+                                [player]);
+                        processingAction = false;
+                        return;
+                    }
+                    break;
             }
         }
         else
@@ -229,7 +313,8 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
                     {
                         NetId = NetId,
                         Action = response,
-                        Amount = CashRegister.DepositedCash
+                        Amount = CashRegister.DepositedCash,
+                        ModuleIndex = packet?.ModuleIndex ?? -1,
                     },
                     [player]
                 );
@@ -241,8 +326,11 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
     #region Client
 
-    public void Client_ProcessCashRegisterAction(CashRegisterAction action, double amount)
+    public void Client_ProcessCashRegisterAction(
+        CommonCashRegisterWithModulesActionPacket packet)
     {
+        CashRegisterAction action = packet.Action;
+        double amount = packet.Amount;
         NetworkLifecycle.Instance.Client?.LogDebug(() => $"NetworkedCashRegisterWithModules.Client_ProcessCashRegisterAction({action}, {amount}) isBuying: {isBuying}, isCancelling: {isCancelling}");
         switch (action)
         {
@@ -251,8 +339,8 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
                 isCancelling = false;
                 isBuying = false;
 
-                foreach (var module in CashRegister.registerModules)
-                    module.ResetData();
+                foreach (var registerModule in CashRegister.registerModules)
+                    registerModule.ResetData();
 
                 CashRegister.OnUnitsToBuyChanged();
 
@@ -274,8 +362,11 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
                 CashRegister?.buyAudio?.Play(CashRegister.transform.position, 1f, 1f, 0f, 1f, 500f, default, null, CashRegister.transform, false, 0f, null);
 
-                foreach (var module in CashRegister.registerModules)
-                    module.ResetData();
+                if (IsShopRegister)
+                    ApplyPurchasedShopStock();
+
+                foreach (var registerModule in CashRegister.registerModules)
+                    registerModule.ResetData();
 
                 CashRegister?.OnUnitsToBuyChanged();
 
@@ -337,8 +428,8 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
                 isAddingCash = false;
 
-                foreach (var module in CashRegister.registerModules)
-                    module.ResetData();
+                foreach (var registerModule in CashRegister.registerModules)
+                    registerModule.ResetData();
 
                 CashRegister?.OnUnitsToBuyChanged();
 
@@ -347,7 +438,51 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
                 CashRegister?.buyAudio?.Play(CashRegister.transform.position, 1f, 1f, 0f, 1f, 500f, default, null, CashRegister.transform, false, 0f, null);
                 break;
+
+            case CashRegisterAction.SetCart:
+                if (TryGetShopModule(
+                        packet.ModuleIndex,
+                        out ScanItemCashRegisterModule cartModule))
+                {
+                    cartModule.SetUnitsToBuy((float)amount);
+                    CashRegister.OnUnitsToBuyChanged();
+                }
+                break;
         }
+    }
+
+    public void SendCartUpdate(
+        ScanItemCashRegisterModule module)
+    {
+        if (!IsShopRegister ||
+            module == null ||
+            NetworkLifecycle.Instance.IsProcessingPacket)
+        {
+            return;
+        }
+
+        int moduleIndex =
+            Array.IndexOf(CashRegister.registerModules, module);
+        if (moduleIndex < 0)
+            return;
+
+        if (NetworkLifecycle.Instance.IsHost())
+        {
+            NetworkLifecycle.Instance.Server.SendCashRegisterAction(
+                new CommonCashRegisterWithModulesActionPacket
+                {
+                    NetId = NetId,
+                    Action = CashRegisterAction.SetCart,
+                    Amount = module.Data.unitsToBuy,
+                    ModuleIndex = moduleIndex,
+                });
+            return;
+        }
+
+        NetworkLifecycle.Instance.Client.SendCashRegisterAction(
+            NetId,
+            CashRegisterAction.AddCart,
+            moduleIndex: moduleIndex);
     }
 
     public IEnumerator Buy()
@@ -429,6 +564,111 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
     }
 
     #endregion
+
+    private bool TryAddShopCart(
+        CommonCashRegisterWithModulesActionPacket packet)
+    {
+        if (!TryGetShopModule(
+                packet.ModuleIndex,
+                out ScanItemCashRegisterModule module))
+        {
+            return false;
+        }
+
+        ShopItemData shopItem =
+            GlobalShopController.Instance.GetShopItemData(
+                module.sellingItemSpec);
+        if (shopItem == null)
+            return false;
+
+        int unitsInOtherModules = CashRegister.registerModules
+            .OfType<ScanItemCashRegisterModule>()
+            .Where(
+                candidate =>
+                    candidate != module &&
+                    candidate.sellingItemSpec ==
+                        module.sellingItemSpec)
+            .Sum(candidate => (int)candidate.Data.unitsToBuy);
+        if (!NetworkedShopCartRules.TryAddUnit(
+                module.Data.unitsToBuy,
+                shopItem.ItemsInStock,
+                unitsInOtherModules,
+                out int units))
+        {
+            return false;
+        }
+
+        module.SetUnitsToBuy(units);
+        packet.Action = CashRegisterAction.SetCart;
+        packet.Amount = units;
+        return true;
+    }
+
+    private bool TryGetShopModule(
+        int moduleIndex,
+        out ScanItemCashRegisterModule module)
+    {
+        module = null;
+        if (!IsShopRegister ||
+            moduleIndex < 0 ||
+            moduleIndex >= CashRegister.registerModules.Length)
+        {
+            return false;
+        }
+
+        module =
+            CashRegister.registerModules[moduleIndex] as
+                ScanItemCashRegisterModule;
+        return module != null &&
+               module.sellingItemSpec != null;
+    }
+
+    private bool TryCaptureShopPurchase(
+        out List<ShopPurchaseLine> purchase)
+    {
+        purchase = CashRegister.registerModules
+            .OfType<ScanItemCashRegisterModule>()
+            .Where(module => module.Data.unitsToBuy >= 1f)
+            .Select(
+                module =>
+                    new ShopPurchaseLine(
+                        module.sellingItemSpec.ItemPrefabName,
+                        (int)module.Data.unitsToBuy))
+            .ToList();
+        return purchase.Count > 0;
+    }
+
+    private void ApplyPurchasedShopStock()
+    {
+        foreach (ScanItemCashRegisterModule module in
+                 CashRegister.registerModules
+                     .OfType<ScanItemCashRegisterModule>())
+        {
+            int count = (int)module.Data.unitsToBuy;
+            if (count <= 0)
+                continue;
+
+            ShopItemData item =
+                GlobalShopController.Instance.GetShopItemData(
+                    module.sellingItemSpec);
+            if (item != null)
+                item.purchasedItems += count;
+        }
+
+        GlobalShopController.Instance.Fire_GlobalShopDataChanged();
+    }
+
+    private sealed class ShopPurchaseLine
+    {
+        public string PrefabName { get; }
+        public int Count { get; }
+
+        public ShopPurchaseLine(string prefabName, int count)
+        {
+            PrefabName = prefabName;
+            Count = count;
+        }
+    }
 
     #region Common
 

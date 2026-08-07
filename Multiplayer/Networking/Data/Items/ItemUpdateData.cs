@@ -1,8 +1,10 @@
 using LiteNetLib.Utils;
 using Multiplayer.Components.Networking.World;
 using Multiplayer.Networking.Serialization;
+using Multiplayer.Utils;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 
 namespace Multiplayer.Networking.Data.Items;
@@ -23,6 +25,7 @@ public class ItemUpdateData
 
     public ItemUpdateType UpdateType { get; set; }
     public ushort ItemNetId { get; set; }
+    public uint CreationRequestId { get; set; }
     public string PrefabName { get; set; }
     public ItemState ItemState { get; set; }
     public Vector3 ItemPosition { get; set; }
@@ -33,10 +36,15 @@ public class ItemUpdateData
     public bool AttachedFront  { get; set; }
     public ushort ContainerNetId { get; set; }
     public int ContainerSlot { get; set; } = -1;
+    public int InventorySlot { get; set; } = -1;
+    public bool InLockedSlot { get; set; }
+    public bool IsDropped { get; set; }
     public Dictionary<string, object> States { get; set; }
 
     public void Serialize(NetDataWriter writer)
     {
+        ValidateForSerialization();
+
         writer.Put((byte)UpdateType);
         writer.Put(ItemNetId);
 
@@ -46,21 +54,36 @@ public class ItemUpdateData
         writer.Put((byte)ItemState);
 
         if (UpdateType.HasFlag(ItemUpdateType.Create))
-            writer.Put(PrefabName);
-
-        if (UpdateType.HasFlag(ItemUpdateType.Create) || UpdateType.HasFlag(ItemUpdateType.ItemState))
         {
-            if (ItemState == ItemState.Dropped || ItemState == ItemState.Thrown) // || UpdateType.HasFlag(ItemUpdateType.ItemPosition)
-            {
-                Vector3Serializer.Serialize(writer, ItemPosition);
-                QuaternionSerializer.Serialize(writer, ItemRotation);
+            writer.Put(PrefabName);
+            writer.Put(CreationRequestId);
+        }
 
-                if (ItemState == ItemState.Thrown)
-                    Vector3Serializer.Serialize(writer, ThrowDirection);
-            }
-            else if (ItemState == ItemState.InInventory || ItemState == ItemState.InHand)
+        // Last-holder ownership applies to every item state and must also be
+        // available when a dropped item is first created for a late joiner.
+        writer.Put(Player);
+
+        bool hasStatePayload =
+            UpdateType.HasFlag(ItemUpdateType.Create) ||
+            UpdateType.HasFlag(ItemUpdateType.ItemState);
+        bool hasPositionPayload =
+            UpdateType.HasFlag(ItemUpdateType.Create) ||
+            UpdateType.HasFlag(ItemUpdateType.ItemPosition) ||
+            (hasStatePayload &&
+                (ItemState == ItemState.Dropped ||
+                 ItemState == ItemState.Thrown));
+
+        if (hasPositionPayload)
+        {
+            Vector3Serializer.Serialize(writer, ItemPosition);
+            QuaternionSerializer.Serialize(writer, ItemRotation);
+        }
+
+        if (hasStatePayload)
+        {
+            if (ItemState == ItemState.Thrown)
             {
-                writer.Put(Player);
+                Vector3Serializer.Serialize(writer, ThrowDirection);
             }
             else if (ItemState == ItemState.Attached)
             {
@@ -71,6 +94,14 @@ public class ItemUpdateData
             {
                 writer.Put(ContainerNetId);
                 writer.Put(ContainerSlot);
+            }
+
+            if (ItemState == ItemState.InHand ||
+                ItemState == ItemState.InInventory)
+            {
+                writer.Put(InventorySlot);
+                writer.Put(InLockedSlot);
+                writer.Put(IsDropped);
             }
         }
 
@@ -90,8 +121,151 @@ public class ItemUpdateData
         }
     }
 
+    internal void ValidateForSerialization()
+    {
+        const ItemUpdateType knownTypes =
+            ItemUpdateType.Create |
+            ItemUpdateType.Destroy |
+            ItemUpdateType.ItemState |
+            ItemUpdateType.ItemPosition |
+            ItemUpdateType.ObjectState;
+
+        if (UpdateType == ItemUpdateType.None ||
+            (UpdateType & ~knownTypes) != 0 ||
+            UpdateType.HasFlag(ItemUpdateType.Destroy) &&
+            UpdateType != ItemUpdateType.Destroy ||
+            UpdateType.HasFlag(ItemUpdateType.Create) &&
+            UpdateType != ItemUpdateType.Create)
+        {
+            throw new InvalidDataException(
+                $"Invalid item update type: {UpdateType}.");
+        }
+
+        if (UpdateType == ItemUpdateType.Destroy)
+            return;
+
+        if (!Enum.IsDefined(typeof(ItemState), ItemState))
+        {
+            throw new InvalidDataException(
+                $"Invalid item state: {ItemState}.");
+        }
+
+        if (UpdateType == ItemUpdateType.Create &&
+            (string.IsNullOrEmpty(PrefabName) ||
+             PrefabName.Length >
+                 ItemPacketLimits.MaxPrefabNameLength))
+        {
+            throw new InvalidDataException(
+                "Create snapshots require a bounded prefab name.");
+        }
+
+        bool hasStatePayload =
+            UpdateType.HasFlag(ItemUpdateType.Create) ||
+            UpdateType.HasFlag(ItemUpdateType.ItemState);
+        bool hasPositionPayload =
+            UpdateType.HasFlag(ItemUpdateType.Create) ||
+            UpdateType.HasFlag(ItemUpdateType.ItemPosition) ||
+            hasStatePayload &&
+            (ItemState == ItemState.Dropped ||
+             ItemState == ItemState.Thrown);
+
+        if (hasPositionPayload &&
+            (!ItemPosition.IsFinite() ||
+             !ItemRotation.IsFinite()))
+        {
+            throw new InvalidDataException(
+                "Item position payload contains a non-finite value.");
+        }
+
+        if (hasStatePayload &&
+            ItemState == ItemState.Thrown &&
+            !ThrowDirection.IsFinite())
+        {
+            throw new InvalidDataException(
+                "Item throw direction contains a non-finite value.");
+        }
+
+        if (hasStatePayload && !HasValidInventoryLayout())
+        {
+            throw new InvalidDataException(
+                $"Invalid inventory layout for slot {InventorySlot}.");
+        }
+
+        if (UpdateType.HasFlag(ItemUpdateType.Create) ||
+            UpdateType.HasFlag(ItemUpdateType.ObjectState))
+        {
+            ValidateTrackedValues();
+        }
+    }
+
+    internal bool HasValidInventoryLayout()
+    {
+        if (ItemState != ItemState.InHand &&
+            ItemState != ItemState.InInventory)
+        {
+            return true;
+        }
+
+        return InventorySlot >= -1 &&
+               InventorySlot <=
+                   ItemPacketLimits.MaxInventorySlotIndex &&
+               (InventorySlot >= 0 ||
+                !InLockedSlot && !IsDropped);
+    }
+
+    private void ValidateTrackedValues()
+    {
+        if (States == null)
+            return;
+        if (States.Count > ItemPacketLimits.MaxTrackedValues)
+        {
+            throw new InvalidDataException(
+                $"Tracked-value count exceeds the limit: {States.Count}.");
+        }
+
+        foreach (KeyValuePair<string, object> state in States)
+        {
+            if (string.IsNullOrEmpty(state.Key) ||
+                state.Key.Length >
+                    ItemPacketLimits.MaxTrackedValueKeyLength)
+            {
+                throw new InvalidDataException(
+                    "Tracked-value key is null, empty, or too long.");
+            }
+
+            switch (state.Value)
+            {
+                case bool:
+                case int:
+                case uint:
+                    break;
+                case float value when value.IsFinite():
+                    break;
+                case double value when
+                    !double.IsNaN(value) &&
+                    !double.IsInfinity(value):
+                    break;
+                case string value when
+                    value.Length <=
+                    ItemPacketLimits.MaxTrackedStringLength:
+                    break;
+                case Vector3 value when value.IsFinite():
+                    break;
+                case Quaternion value when value.IsFinite():
+                    break;
+                default:
+                    throw new InvalidDataException(
+                        $"Tracked value '{state.Key}' has an unsupported, " +
+                        "null, non-finite, or oversized value.");
+            }
+        }
+    }
+
     public void Deserialize(NetDataReader reader)
     {
+        InventorySlot = -1;
+        InLockedSlot = false;
+        IsDropped = false;
         UpdateType = (ItemUpdateType)reader.GetByte();
         ItemNetId = reader.GetUShort();
 
@@ -101,25 +275,37 @@ public class ItemUpdateData
         ItemState = (ItemState)reader.GetByte();
 
         if (UpdateType.HasFlag(ItemUpdateType.Create))
-            PrefabName = reader.GetString();
-
-        if (UpdateType.HasFlag(ItemUpdateType.Create) || UpdateType.HasFlag(ItemUpdateType.ItemState))
         {
-            if (ItemState == ItemState.Dropped || ItemState == ItemState.Thrown) // || UpdateType.HasFlag(ItemUpdateType.ItemPosition)
-            {
-                ItemPosition = Vector3Serializer.Deserialize(reader);
-                ItemRotation = QuaternionSerializer.Deserialize(reader);
+            PrefabName = reader.GetString(
+                ItemPacketLimits.MaxPrefabNameLength);
+            CreationRequestId = reader.GetUInt();
+        }
 
-                if (ItemState == ItemState.Thrown)
-                {
-                    Multiplayer.LogDebug(() => $"ItemUpdateData.Deserialize() Item Thrown before: {ThrowDirection}");
-                    ThrowDirection = Vector3Serializer.Deserialize(reader);
-                    Multiplayer.LogDebug(() => $"ItemUpdateData.Deserialize() Item Thrown after: {ThrowDirection}");
-                }
-            }
-            else if (ItemState == ItemState.InInventory || ItemState == ItemState.InHand)
+        Player = reader.GetByte();
+
+        bool hasStatePayload =
+            UpdateType.HasFlag(ItemUpdateType.Create) ||
+            UpdateType.HasFlag(ItemUpdateType.ItemState);
+        bool hasPositionPayload =
+            UpdateType.HasFlag(ItemUpdateType.Create) ||
+            UpdateType.HasFlag(ItemUpdateType.ItemPosition) ||
+            (hasStatePayload &&
+                (ItemState == ItemState.Dropped ||
+                 ItemState == ItemState.Thrown));
+
+        if (hasPositionPayload)
+        {
+            ItemPosition = Vector3Serializer.Deserialize(reader);
+            ItemRotation = QuaternionSerializer.Deserialize(reader);
+        }
+
+        if (hasStatePayload)
+        {
+            if (ItemState == ItemState.Thrown)
             {
-                Player = reader.GetByte();
+                Multiplayer.LogDebug(() => $"ItemUpdateData.Deserialize() Item Thrown before: {ThrowDirection}");
+                ThrowDirection = Vector3Serializer.Deserialize(reader);
+                Multiplayer.LogDebug(() => $"ItemUpdateData.Deserialize() Item Thrown after: {ThrowDirection}");
             }
             else if (ItemState == ItemState.Attached)
             {
@@ -131,17 +317,33 @@ public class ItemUpdateData
                 ContainerNetId = reader.GetUShort();
                 ContainerSlot = reader.GetInt();
             }
+
+            if (ItemState == ItemState.InHand ||
+                ItemState == ItemState.InInventory)
+            {
+                InventorySlot = reader.GetInt();
+                InLockedSlot = reader.GetBool();
+                IsDropped = reader.GetBool();
+            }
         }
 
         if (UpdateType.HasFlag(ItemUpdateType.Create) || UpdateType.HasFlag(ItemUpdateType.ObjectState))
         {
             int stateCount = reader.GetInt();
+            if (stateCount < 0 ||
+                stateCount > ItemPacketLimits.MaxTrackedValues)
+            {
+                throw new InvalidDataException(
+                    $"Invalid tracked-value count: {stateCount}.");
+            }
+
             if (stateCount > 0)
             {
-                States = new Dictionary<string, object>();
+                States = new Dictionary<string, object>(stateCount);
                 for (int i = 0; i < stateCount; i++)
                 {
-                    string key = reader.GetString();
+                    string key = reader.GetString(
+                        ItemPacketLimits.MaxTrackedValueKeyLength);
                     object value = DeserializeTrackedValue(reader);
                     States[key] = value;
                 }
@@ -176,9 +378,27 @@ public class ItemUpdateData
             writer.Put((byte)4);
             writer.Put(stringValue);
         }
+        else if (value is double doubleValue)
+        {
+            writer.Put((byte)5);
+            writer.Put(doubleValue);
+        }
+        else if (value is Vector3 vectorValue)
+        {
+            writer.Put((byte)6);
+            Vector3Serializer.Serialize(writer, vectorValue);
+        }
+        else if (value is Quaternion quaternionValue)
+        {
+            writer.Put((byte)7);
+            QuaternionSerializer.Serialize(writer, quaternionValue);
+        }
         else
         {
-            throw new NotSupportedException($"ItemUpdateData.SerializeTrackedValue({ItemNetId}, {PrefabName??""}) Unsupported type for serialization: {value.GetType()}");
+            throw new NotSupportedException(
+                $"ItemUpdateData.SerializeTrackedValue({ItemNetId}, " +
+                $"{PrefabName ?? ""}) Unsupported type for serialization: " +
+                $"{value?.GetType().ToString() ?? "null"}");
         }
     }
 
@@ -191,7 +411,12 @@ public class ItemUpdateData
             case 1: return reader.GetInt();
             case 2: return reader.GetUInt();
             case 3: return reader.GetFloat();
-            case 4: return reader.GetString();
+            case 4:
+                return reader.GetString(
+                    ItemPacketLimits.MaxTrackedStringLength);
+            case 5: return reader.GetDouble();
+            case 6: return Vector3Serializer.Deserialize(reader);
+            case 7: return QuaternionSerializer.Deserialize(reader);
 
             default:
                 throw new NotSupportedException($"ItemUpdateData.DeserializeTrackedValue({ItemNetId}, {PrefabName ?? ""}) Unsupported type code for deserialization: {typeCode}");

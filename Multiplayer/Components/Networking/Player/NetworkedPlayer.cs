@@ -1,9 +1,7 @@
-using DV.Interaction;
-using DV.Player;
+using DV.CabControls;
 using Multiplayer.Components.Networking.Train;
 using Multiplayer.Editor.Components.Player;
 using Multiplayer.Networking.Data.Player;
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace Multiplayer.Components.Networking.Player;
@@ -13,26 +11,10 @@ namespace Multiplayer.Components.Networking.Player;
 /// </summary>
 public class NetworkedPlayer : MonoBehaviour
 {
-    #region Static Setup
-    private static Vector3 itemAnchorOffset = new(0.2f, 1.5f, 0.4f);
-
-    /// <summary>
-    /// Captures the standard offset position for held items relative to the player transform
-    /// for mapping to a NetworkedPlayer.
-    /// This must be called as soon as the world is loaded, before the local player moves or crouches.
-    /// </summary>
     public static void CaptureItemAnchorOffset()
     {
-        //todo: there's some minor inconsistency with return values and may be related to:
-        // - the direction/rotation of the camera
-        // - player loading status (maybe posistion hasn't settled yet)
-        if (!VRManager.IsVREnabled())
-        {
-            itemAnchorOffset = PlayerManager.PlayerTransform.InverseTransformPoint(ItemPositionController.Instance.itemAnchor.position);
-            Multiplayer.LogDebug(() => $"NetworkedPlayer.CaptureItemAnchorOffset() itemAnchorOffset: {itemAnchorOffset}");
-        }
+        NetworkedPlayerItemAnchor.Capture();
     }
-    #endregion
 
     private const float LERP_SPEED = 5.0f;
     private const float MAX_LEAN_ANGLE = 50f;
@@ -98,32 +80,44 @@ public class NetworkedPlayer : MonoBehaviour
     private float angleSmoothRefVel;
     private float currentSitHeight;
 
-    // VR hand tracking — targets set from incoming packets
-    private Transform leftHandTransform;
-    private Transform rightHandTransform;
-    private Vector3 targetLeftHandPos;
-    private Quaternion targetLeftHandRot = Quaternion.identity;
-    private Vector3 targetRightHandPos;
-    private Quaternion targetRightHandRot = Quaternion.identity;
+    public bool IsChainCouplerHandTargetActive =>
+        ikHandler?.HandController?.IsChainTargetActive ?? false;
 
-    // Current lerped values — tracked independently to avoid Animator fighting
-    private Vector3 currentLeftHandWorldPos;
-    private Quaternion currentLeftHandWorldRot = Quaternion.identity;
-    private Vector3 currentRightHandWorldPos;
-    private Quaternion currentRightHandWorldRot = Quaternion.identity;
-    private bool handTrackingInitialized;
+    private NetworkedPlayerHeldItem heldItem;
+    public GameObject RightHandItemGO => heldItem?.Item;
 
-    // Inventory and item holding
-    private GameObject inventoryRoot;
-    public GameObject RightHandItemGO { get; private set; }
-    private readonly List<Collider> disabledRHItemColliders = [];
-    public GameObject LeftHandItemGO { get; private set; }
-    private readonly List<Collider> disabledLHItemColliders = [];
-    private Vector3? itemHoldPos;
-    private Quaternion? itemHoldRot;
+    /// <summary>
+    /// Returns true when an interaction point belongs to the item currently
+    /// held by this remote player. Handheld items must follow the idle hand;
+    /// they must not turn a control interaction into a persistent IK target.
+    /// </summary>
+    public bool IsHeldItemInteraction(Vector3 worldPosition, float maxDistance = 1.5f)
+    {
+        GameObject item = RightHandItemGO;
+        if (item == null)
+            return false;
+
+        float maxDistanceSqr = maxDistance * maxDistance;
+        Transform itemTransform = item.transform;
+        if ((itemTransform.position - worldPosition).sqrMagnitude <= maxDistanceSqr)
+            return true;
+
+        foreach (Renderer renderer in item.GetComponentsInChildren<Renderer>(true))
+        {
+            if (renderer == null)
+                continue;
+
+            Vector3 closestPoint = renderer.bounds.ClosestPoint(worldPosition);
+            if ((closestPoint - worldPosition).sqrMagnitude <= maxDistanceSqr)
+                return true;
+        }
+
+        return false;
+    }
 
     protected void Awake()
     {
+        heldItem = new NetworkedPlayerHeldItem(this);
         nameTag = GetComponentInChildren<NameTag>();
 
         nameTag.LookTarget = PlayerManager.ActiveCamera.transform;
@@ -163,6 +157,11 @@ public class NetworkedPlayer : MonoBehaviour
     protected void OnDestroy()
     {
         Settings.OnSettingsUpdated -= OnSettingsUpdated;
+
+        // Only detach the visual child before destroying the avatar hierarchy.
+        // Inventory persistence owns the item state; disconnect is not a drop.
+        if (!UnloadWatcher.isQuitting && !UnloadWatcher.isUnloading)
+            heldItem?.Detach();
     }
 
     private void OnSettingsUpdated(Settings settings)
@@ -181,9 +180,8 @@ public class NetworkedPlayer : MonoBehaviour
             animationHandler = null;
             DestroyImmediate(playerModel);
             headTransform = null;
-            leftHandTransform = null;
-            rightHandTransform = null;
-            handTrackingInitialized = false;
+            ikHandler = null;
+            heldItem.ConfigureModel(null, null);
         }
 
         playerModel = Instantiate(newModel, transform);
@@ -192,12 +190,10 @@ public class NetworkedPlayer : MonoBehaviour
         var animator = playerModel.GetComponentInChildren<Animator>(true);
         if (animator != null)
         {
-            if (IsVR)
-            {
-                // Track VR Networked player's IK state for hands and feet
-                ikHandler = animator.gameObject.AddComponent<NetworkedPlayerIKHandler>();
-                ikHandler.IsActive = false;
-            }
+            ikHandler =
+                animator.gameObject.GetComponent<NetworkedPlayerIKHandler>() ??
+                animator.gameObject.AddComponent<NetworkedPlayerIKHandler>();
+            ikHandler.InitializeFromCurrentPose();
 
             headTransform = animator.GetBoneTransform(HumanBodyBones.Head);
             if (headTransform == null)
@@ -205,8 +201,19 @@ public class NetworkedPlayer : MonoBehaviour
 
             spineTransform = animator.GetBoneTransform(HumanBodyBones.Spine);
 
-            leftHandTransform = animator.GetBoneTransform(HumanBodyBones.LeftHand);
-            rightHandTransform = animator.GetBoneTransform(HumanBodyBones.RightHand);
+            Transform leftHandTransform =
+                animator.GetBoneTransform(HumanBodyBones.LeftHand);
+            Transform rightHandTransform =
+                animator.GetBoneTransform(HumanBodyBones.RightHand);
+            Transform rightPalmReference =
+                animator.GetBoneTransform(HumanBodyBones.RightMiddleProximal) ??
+                animator.GetBoneTransform(HumanBodyBones.RightIndexProximal);
+            heldItem.ConfigureModel(
+                rightHandTransform,
+                rightPalmReference);
+            ikHandler.AttachHandController(
+                this,
+                rightHandTransform);
 
             if (leftHandTransform == null || rightHandTransform == null)
                 Multiplayer.LogWarning($"Hand bones not found in model {newModel.name}. VR hand tracking will not work");
@@ -294,11 +301,7 @@ public class NetworkedPlayer : MonoBehaviour
             selfTransform.rotation = Quaternion.Lerp(transform.rotation, targetRotation, t);
         }
 
-        if (RightHandItemGO != null)
-        {
-            RightHandItemGO.transform.position = selfTransform.position + GetItemOffsetFromPlayer();
-            RightHandItemGO.transform.rotation = selfTransform.rotation * (itemHoldRot ?? Quaternion.identity);//ItemPositionController.Instance.itemAnchor.localRotation);
-        }
+        heldItem.Tick();
     }
 
     /// <summary>
@@ -319,8 +322,40 @@ public class NetworkedPlayer : MonoBehaviour
 
         ApplySpineAndHeadRotation();
 
-        if (IsVR)
-            ApplyHandTracking();
+        ikHandler?.HandController?.LateTick(
+            selfTransform.position,
+            selfTransform.rotation);
+
+        heldItem.LateTick();
+    }
+
+    public void SetChainCouplerHandTarget(
+        Vector3 worldPosition,
+        Quaternion worldRotation)
+    {
+        ikHandler?.HandController?.SetChainTarget(
+            worldPosition,
+            worldRotation);
+    }
+
+    public void ClearChainCouplerHandTarget()
+    {
+        ikHandler?.HandController?.ClearChainTarget();
+    }
+
+    public void PulseControlHandIK(Vector3 worldPosition)
+    {
+        ikHandler?.HandController?.PulseControl(worldPosition);
+    }
+
+    public void SetControlHandIK(Vector3 worldPosition)
+    {
+        ikHandler?.HandController?.SetControl(worldPosition);
+    }
+
+    public void ClearControlHandIK()
+    {
+        ikHandler?.HandController?.ClearControl();
     }
 
     private void ApplySpineAndHeadRotation()
@@ -334,7 +369,7 @@ public class NetworkedPlayer : MonoBehaviour
             // Side lean is always spinning around the root's global FORWARD axis
             Quaternion leanOffset = Quaternion.AngleAxis(currentLeanAngle, selfTransform.forward);
 
-            // Directly assign the uniform world rotation 
+            // Directly assign the uniform world rotation
             spineTransform.rotation = leanOffset * currentModelSpineBase;
         }
 
@@ -345,25 +380,6 @@ public class NetworkedPlayer : MonoBehaviour
         Quaternion pitchRotation = Quaternion.AngleAxis(currentHeadPitch, selfTransform.right);
         Quaternion leanTiltRotation = Quaternion.AngleAxis(currentLeanAngle * HEAD_LEAN_MULTIPLIER, selfTransform.forward);
         headTransform.rotation = pitchRotation * leanTiltRotation * currentModelHeadBase;
-    }
-
-    private void ApplyHandTracking()
-    {
-        if (!handTrackingInitialized || ikHandler == null)
-            return;
-
-        float t = Time.deltaTime * LERP_SPEED;
-
-        currentLeftHandWorldPos = Vector3.Lerp(currentLeftHandWorldPos, targetLeftHandPos, t);
-        currentLeftHandWorldRot = Quaternion.Lerp(currentLeftHandWorldRot, targetLeftHandRot, t);
-
-        currentRightHandWorldPos = Vector3.Lerp(currentRightHandWorldPos, targetRightHandPos, t);
-        currentRightHandWorldRot = Quaternion.Lerp(currentRightHandWorldRot, targetRightHandRot, t);
-
-        ikHandler.LeftHandPosition = selfTransform.position + targetRotation * currentLeftHandWorldPos;
-        ikHandler.LeftHandRotation = targetRotation * currentLeftHandWorldRot;
-        ikHandler.RightHandPosition = selfTransform.position + targetRotation * currentRightHandWorldPos;
-        ikHandler.RightHandRotation = targetRotation * currentRightHandWorldRot;
     }
 
     /// <summary>
@@ -396,27 +412,10 @@ public class NetworkedPlayer : MonoBehaviour
         if (trackingData.LookPosition.HasValue)
             targetHeadPitch = trackingData.LookPosition.Value;
 
-        if (trackingData.LeftHandPosition.HasValue)
-            targetLeftHandPos = trackingData.LeftHandPosition.Value;
-        if (trackingData.LeftHandRotation.HasValue)
-            targetLeftHandRot = trackingData.LeftHandRotation.Value;
-        if (trackingData.RightHandPosition.HasValue)
-            targetRightHandPos = trackingData.RightHandPosition.Value;
-        if (trackingData.RightHandRotation.HasValue)
-            targetRightHandRot = trackingData.RightHandRotation.Value;
-
-        // Todo: improve sync, the arms can be a little spaghetti-y
-        if (!handTrackingInitialized)
-        {
-            currentLeftHandWorldPos = targetLeftHandPos;
-            currentLeftHandWorldRot = targetLeftHandRot;
-            currentRightHandWorldPos = targetRightHandPos;
-            currentRightHandWorldRot = targetRightHandRot;
-            handTrackingInitialized = true;
-
-            if (ikHandler != null)
-                ikHandler.IsActive = true;
-        }
+        ikHandler?.HandController?.UpdateTracking(
+            trackingData,
+            selfTransform.position,
+            selfTransform.rotation);
     }
 
     private void SetPosture(PlayerPostureFlags posture)
@@ -466,87 +465,32 @@ public class NetworkedPlayer : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Attach item to player object when in inventory
-    /// </summary>
-    /// <param name="itemGo">The item GameObject to attach</param>
-    public void AddItemToInventory(GameObject itemGo)
+    public void HoldItem(
+        GameObject itemGo,
+        Vector3? targetPos = null,
+        Quaternion? targetRot = null,
+        bool rightHand = true,
+        bool followTrackedHand = false)
     {
-        itemGo.transform.SetParent(inventoryRoot.transform, true);
-        itemGo.SetActive(false);
+        // An item arriving from another player can race a stale control packet.
+        // Reset control IK before attaching the item so the hand remains in
+        // its animated idle pose while the item is placed at it.
+        ClearControlHandIK();
+        heldItem.Hold(
+            itemGo,
+            targetPos,
+            targetRot,
+            followTrackedHand);
     }
 
-    /// <summary>
-    /// Sets the player's currently held item with optional position and rotation offsets
-    /// </summary>
-    /// <param name="itemGo">The item GameObject to hold</param>
-    /// <param name="targetPos">Optional local position offset</param>
-    /// <param name="targetRot">Optional local rotation offset</param>
-    /// <param name="rightHand">Indicates if the item is held in the right hand. Always true for nonVR</param>
-
-    // TODO: This currently only supports right hand holding and will need to be expanded to support left hand items and dual hand items
-    public void HoldItem(GameObject itemGo, Vector3? targetPos = null, Quaternion? targetRot = null, bool rightHand = true)
+    public void RefreshHeldItem(GameObject itemGo)
     {
-        Multiplayer.LogDebug(() => $"NetworkedPlayer.HoldItem({itemGo.GetPath()}) Player: {username}, Before position: {itemGo.transform.localPosition}, rotation:  {itemGo.transform.localRotation}, Target pos: {targetPos}, Target rot: {targetRot}");
-
-        itemGo.transform.SetParent(selfTransform, true);
-        var itemGrabHandler = itemGo.GetComponentInChildren<GrabHandlerItem>();
-        if (itemGrabHandler != null)
-        {
-            itemGrabHandler.TogglePhysics(false);
-            itemGrabHandler.interactionAllowed = false;
-        }
-
-        // Disable colliders to stop annoying noises and other potential issues
-        disabledRHItemColliders.Clear();
-        foreach (Collider col in itemGo.GetComponentsInChildren<Collider>(true))
-        {
-            Multiplayer.LogDebug(() => $"NetworkedPlayer.HoldItem() Collider: {col.name}, Enabled: {col.enabled}, Type: {col.GetType()}");
-            if (col != null && col.enabled)
-                col.enabled = false;
-
-            disabledRHItemColliders.Add(col);
-        }
-
-        RightHandItemGO = itemGo;
-        itemHoldPos = targetPos;
-        itemHoldRot = targetRot;
+        heldItem.Refresh(itemGo);
     }
 
-    /// <summary>
-    /// Drops the player's currently held item
-    /// </summary>
-
-    // TODO: This currently only supports right hand holding and will need to be expanded to support left hand items and dual hand items
     public void DropItem()
     {
-        // Re-enable previously disabled colliders
-        foreach (Collider col in disabledRHItemColliders)
-        {
-            Multiplayer.LogDebug(() => $"NetworkedPlayer.DropItem() Re-enabling collider: {col.name}, Type: {col.GetType()}");
-            if (col != null)
-                col.enabled = true;
-        }
-        disabledRHItemColliders.Clear();
-
-        var itemGrabHandler = RightHandItemGO.GetComponentInChildren<GrabHandlerItem>();
-        if (itemGrabHandler != null)
-        {
-            itemGrabHandler.TogglePhysics(true);
-            itemGrabHandler.interactionAllowed = true;
-        }
-
-        RightHandItemGO?.transform.SetParent(WorldMover.OriginShiftParent, true);
-
-        RightHandItemGO = null;
-        itemHoldPos = null;
-        itemHoldRot = null;
-    }
-
-    private Vector3 GetItemOffsetFromPlayer()
-    {
-        Vector3 baseOffset = itemAnchorOffset;
-        Vector3 finalOffset = itemHoldPos.HasValue ? baseOffset + itemHoldPos.Value : baseOffset;
-        return selfTransform.TransformDirection(finalOffset);
+        ClearControlHandIK();
+        heldItem.Drop();
     }
 }

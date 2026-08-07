@@ -35,6 +35,11 @@ public class StartGameData_ServerSave : AStartGameData
         DifficultyToUse = DifficultyDataUtils.GetDifficultyFromJSON(JObject.Parse(packet.SerializedDifficulty), false);
 
         saveGameData.SetFloat(SaveGameKeys.Player_money, packet.Money);
+        saveGameData.SetInt(
+            SaveGameKeys.Starting_items,
+            (int)GameParams.StartingItemsType.Basic);
+        NetworkedPlayerInventoryLoadContext.Begin(
+            packet.HasSavedPlayerInventory);
 
         saveGameData.SetStringArray(SaveGameKeys.Licenses_Jobs, packet.AcquiredJobLicenses);
         saveGameData.SetStringArray(SaveGameKeys.Licenses_General, packet.AcquiredGeneralLicenses);
@@ -60,7 +65,8 @@ public class StartGameData_ServerSave : AStartGameData
         });
 
         // Load player inventory
-        List<StorageItemData> items = [];
+        List<StorageItemData> inventoryItems = [];
+        List<StorageItemData> containerItems = [];
 
         foreach (var item in packet.PlayerItems)
         {
@@ -80,10 +86,23 @@ public class StartGameData_ServerSave : AStartGameData
                 item.ContainerId
             );
 
-            items.Add(itemData);
+            if (string.IsNullOrEmpty(itemData.containerId))
+                inventoryItems.Add(itemData);
+            else
+                containerItems.Add(itemData);
         }
-        Multiplayer.LogDebug(() => $"StartGameData_ServerSave.SetFromPacket() PlayerItems count: {packet.PlayerItems.Length}, items string count: {items.Count()}");
-        saveGameData.SetObject(SaveGameKeys.Storage_Inventory, items);
+        Multiplayer.LogDebug(
+            () =>
+                $"StartGameData_ServerSave.SetFromPacket() " +
+                $"PlayerItems count: {packet.PlayerItems.Length}, " +
+                $"inventory count: {inventoryItems.Count}, " +
+                $"container count: {containerItems.Count}");
+        saveGameData.SetObject(
+            SaveGameKeys.Storage_Inventory,
+            inventoryItems);
+        saveGameData.SetObject(
+            SaveGameKeys.Storage_ItemContainers,
+            containerItems);
 
         //For clients we need to have a session - new users may not have a session and this may also be causing problems with licenses syncing
         if (NetworkLifecycle.Instance.IsHost())

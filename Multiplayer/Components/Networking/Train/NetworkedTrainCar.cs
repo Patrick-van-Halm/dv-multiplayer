@@ -252,9 +252,21 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
         base.Awake();
 
         TrainCar = GetComponent<TrainCar>();
+        if (TrainCar == null)
+        {
+            Multiplayer.LogError(
+                $"NetworkedTrainCar.Awake() TrainCar is missing on {gameObject?.name}");
+            return;
+        }
+
         trainCarsToNetworkedTrainCars[TrainCar] = this;
 
+        // A pooled client car may already have InitializeExistingLogicCar
+        // called before this component is added. Subscribe first, then run
+        // the same path immediately so that race cannot leave CurrentID empty.
+        TrainCar.LogicCarInitialized -= OnLogicCarInitialised;
         TrainCar.LogicCarInitialized += OnLogicCarInitialised;
+        OnLogicCarInitialised();
 
         bogie1 = TrainCar.Bogies[0];
         bogie2 = TrainCar.Bogies[1];
@@ -283,7 +295,12 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
             return;
         }
 
-        Multiplayer.LogDebug(() => $"NetworkedTrainCar.Start({TrainCar?.ID}, {NetId})");
+        OnLogicCarInitialised();
+        Multiplayer.LogDebug(
+            () =>
+                $"NetworkedTrainCar.Start({TrainCar?.ID}, {NetId}) " +
+                $"CurrentID={CurrentID}, logicCar={TrainCar?.logicCar != null}, " +
+                $"clientInitialized={Client_Initialized}");
 
         if (TrainCar.couplers == null || TrainCar.couplers.Length == 0)
         {
@@ -710,20 +727,37 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
     private void OnLogicCarInitialised()
     {
-        //Multiplayer.LogWarning("OnLogicCarInitialised");
+        if (TrainCar == null || string.IsNullOrEmpty(TrainCar.ID))
+        {
+            Multiplayer.LogWarning(
+                $"NetworkedTrainCar.OnLogicCarInitialised() invalid car " +
+                $"id on {gameObject?.name}, logicCar={TrainCar?.logicCar != null}");
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(CurrentID) && CurrentID != TrainCar.ID)
+        {
+            trainCarIdToNetworkedTrainCars.Remove(CurrentID);
+            trainCarIdToTrainCars.Remove(CurrentID);
+        }
+
+        CurrentID = TrainCar.ID;
+        trainCarIdToNetworkedTrainCars[CurrentID] = this;
+        trainCarIdToTrainCars[CurrentID] = TrainCar;
+
         if (TrainCar.logicCar != null)
         {
-            CurrentID = TrainCar.ID;
-            trainCarIdToNetworkedTrainCars[CurrentID] = this;
-            trainCarIdToTrainCars[CurrentID] = TrainCar;
-
             TrainCar.LogicCarInitialized -= OnLogicCarInitialised;
         }
-        else
-        {
-            Multiplayer.LogWarning("OnLogicCarInitialised Car Not Initialised!");
-        }
 
+        if (Multiplayer.Settings?.DebugLogging == true)
+        {
+            Debug.Log(
+                $"[MultiplayerDebug] TrainCar initialized " +
+                $"id={CurrentID} netId={NetId} " +
+                $"logicCar={TrainCar.logicCar != null} " +
+                $"clientInitialized={Client_Initialized}");
+        }
     }
     private IEnumerator Server_WaitForLogicCar()
     {
@@ -973,6 +1007,29 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
     public bool Server_ValidateCouplerInteraction(CommonCouplerInteractionPacket packet, ServerPlayer player)
     {
+        if (packet == null || player == null)
+            return false;
+
+        CouplerInteractionType interactionType =
+            (CouplerInteractionType)packet.Flags;
+        if (!CouplerInteractionRules.IsValid(interactionType))
+            return false;
+
+        Coupler coupler = packet.IsFrontCoupler
+            ? TrainCar?.frontCoupler
+            : TrainCar?.rearCoupler;
+        if (coupler == null ||
+            !NetworkedCouplerAuthority.ValidateRequestedTarget(
+                packet,
+                interactionType,
+                coupler) ||
+            !NetworkedRemoteCoupler.ValidateAuthority(
+                packet,
+                interactionType,
+                player,
+                TrainCar))
+            return false;
+
         Multiplayer.LogDebug(() =>
                 $"Server_ValidateCouplerInteraction([[{(CouplerInteractionType)packet.Flags}], {CurrentID}, {packet.NetId}], {player.PlayerId}) " +
                 $"isFront: {packet.IsFrontCoupler}, frontInteracting: {frontInteracting}, frontInteractionPeer: {frontInteractionPlayer}, " +
@@ -989,7 +1046,34 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
         Multiplayer.LogDebug(() => $"Server_ValidateCouplerInteraction([{packet.Flags}, {CurrentID}, {packet.NetId}], {player.PlayerId}) No one interacting");
 
-        if (((CouplerInteractionType)packet.Flags).HasFlag(CouplerInteractionType.Start))
+        if (!CouplerInteractionRules.IsRemote(interactionType) &&
+            !coupler.transform.PlayerCanReach(player))
+        {
+            return false;
+        }
+
+        if (interactionType == CouplerInteractionType.DragPoseUpdate)
+        {
+            bool interactionMatches = packet.IsFrontCoupler
+                ? frontInteracting && frontInteractionPlayer == player
+                : rearInteracting && rearInteractionPlayer == player;
+            if (!interactionMatches ||
+                !packet.HandTargetLocalPosition.IsFinite() ||
+                !packet.HandTargetLocalRotation.IsFinite())
+            {
+                return false;
+            }
+
+            Vector3 handTarget =
+                TrainCar.transform.TransformPoint(
+                    packet.HandTargetLocalPosition);
+            if (!handTarget.IsFinite() ||
+                !handTarget.PlayerCanReach(player))
+            {
+                return false;
+            }
+        }
+        if (interactionType == CouplerInteractionType.Start)
         {
             if (packet.IsFrontCoupler)
             {
@@ -1002,16 +1086,13 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
                 rearInteractionPlayer = player;
             }
         }
-        else
+        else if (interactionType != CouplerInteractionType.DragPoseUpdate)
         {
             if (packet.IsFrontCoupler)
                 frontInteracting = false;
             else
                 rearInteracting = false;
         }
-
-        //todo: Additional checks for player location/proximity
-
         Multiplayer.LogDebug(() => $"Server_ValidateCouplerInteraction([{packet.Flags}, {CurrentID}, {packet.NetId}], {player.PlayerId}) Validation passed!");
         return true;
     }
@@ -1156,6 +1237,22 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
         Common_SendFuses();
         Common_SendPorts();
         Common_SendPaintThemes();
+        Common_SendCouplerDragPose();
+    }
+
+    private void Common_SendCouplerDragPose()
+    {
+        if (couplerInteraction?.ChainScript?.knob == null ||
+            couplerInteraction.ChainScript.state !=
+                ChainCouplerInteraction.State.Being_Dragged ||
+            NetworkLifecycle.Instance.IsProcessingPacket)
+        {
+            return;
+        }
+
+        NetworkLifecycle.Instance.Client.SendCouplerInteraction(
+            CouplerInteractionType.DragPoseUpdate,
+            couplerInteraction);
     }
 
     private void Common_SendHandbrakePosition()
@@ -1462,6 +1559,22 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
             }
             return;
         }
+        if (flags == CouplerInteractionType.DragPoseUpdate)
+        {
+            if (NetworkLifecycle.Instance.Client == null ||
+                !NetworkLifecycle.Instance.Client.ClientPlayerManager
+                    .TryGetPlayer(
+                        packet.PlayerId,
+                        out NetworkedPlayer draggingPlayer) ||
+                !draggingPlayer.IsChainCouplerHandTargetActive)
+            {
+                return;
+            }
+
+            ApplyRemoteCouplerDragPose(coupler, packet);
+            return;
+        }
+
         if (flags == CouplerInteractionType.Start && coupler != couplerInteraction)
         {
             Multiplayer.LogDebug(() => $"Common_ReceiveCouplerInteraction() Interaction started [{CurrentID}, {NetId}] isFront: {coupler.isFrontCoupler}");
@@ -1472,8 +1585,11 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
             if (buttonBase)
                 buttonBase.InteractionAllowed = false;
 
+            HoldRemoteCouplerInRightHand(coupler, packet);
             return;
         }
+
+        ReleaseRemoteCouplerFromRightHand(coupler, packet.PlayerId);
 
         if (coupler.ChainScript.state == ChainCouplerInteraction.State.Being_Dragged)
         {
@@ -1611,6 +1727,81 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
             coupler.ChainScript.knobGizmo.InteractionAllowed = true;
         if (buttonBase)
             buttonBase.InteractionAllowed = true;
+    }
+
+    private static void HoldRemoteCouplerInRightHand(
+        Coupler coupler,
+        CommonCouplerInteractionPacket packet)
+    {
+        if (coupler?.ChainScript?.knob == null ||
+            NetworkLifecycle.Instance.Client == null ||
+            !NetworkLifecycle.Instance.Client.ClientPlayerManager.TryGetPlayer(
+                packet.PlayerId,
+                out NetworkedPlayer player) ||
+            player.IsVR)
+        {
+            return;
+        }
+
+        if (coupler.ChainScript.state !=
+            ChainCouplerInteraction.State.Being_Dragged)
+        {
+            coupler.ChainScript.fsm.Fire(
+                ChainCouplerInteraction.Trigger.Picked_Up_By_Player);
+        }
+
+        // Clean up a knob parented by an older build. The chain itself is now
+        // driven from its replicated target, and only the avatar hand uses IK.
+        if (player.RightHandItemGO == coupler.ChainScript.knob)
+            player.DropItem();
+
+        ApplyRemoteCouplerDragPose(coupler, packet);
+    }
+
+    private static void ApplyRemoteCouplerDragPose(
+        Coupler coupler,
+        CommonCouplerInteractionPacket packet)
+    {
+        if (coupler?.ChainScript?.knob == null ||
+            NetworkLifecycle.Instance.Client == null ||
+            !NetworkLifecycle.Instance.Client.ClientPlayerManager.TryGetPlayer(
+                packet.PlayerId,
+                out NetworkedPlayer player) ||
+            player.IsVR)
+        {
+            return;
+        }
+
+        Transform train = coupler.train.transform;
+        Vector3 targetPosition = train.TransformPoint(
+            packet.HandTargetLocalPosition);
+        Quaternion targetRotation =
+            train.rotation * packet.HandTargetLocalRotation;
+
+        coupler.ChainScript.knob.transform.SetPositionAndRotation(
+            targetPosition,
+            targetRotation);
+        player.SetChainCouplerHandTarget(
+            targetPosition,
+            targetRotation);
+    }
+
+    private static void ReleaseRemoteCouplerFromRightHand(
+        Coupler coupler,
+        byte playerId)
+    {
+        GameObject knob = coupler?.ChainScript?.knob;
+        if (NetworkLifecycle.Instance.Client == null ||
+            !NetworkLifecycle.Instance.Client.ClientPlayerManager.TryGetPlayer(
+                playerId,
+                out NetworkedPlayer player))
+        {
+            return;
+        }
+
+        player.ClearChainCouplerHandTarget();
+        if (knob != null && player.RightHandItemGO == knob)
+            player.DropItem();
     }
 
     private IEnumerator LooseAttachCoupler(Coupler coupler, Coupler otherCoupler)
@@ -1882,12 +2073,24 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
     private IEnumerator Client_InitLater()
     {
+        OnLogicCarInitialised();
+
         while ((client_bogie1Queue = bogie1.GetComponent<NetworkedBogie>()) == null)
             yield return null;
         while ((client_bogie2Queue = bogie2.GetComponent<NetworkedBogie>()) == null)
             yield return null;
 
+        OnLogicCarInitialised();
         Client_Initialized = true;
+
+        if (Multiplayer.Settings?.DebugLogging == true)
+        {
+            Debug.Log(
+                $"[MultiplayerDebug] TrainCar client ready " +
+                $"id={CurrentID} netId={NetId} " +
+                $"logicCar={TrainCar?.logicCar != null} " +
+                $"bogies={(client_bogie1Queue != null && client_bogie2Queue != null)}");
+        }
     }
 
     public void Client_ReceiveTrainPhysicsUpdate(in TrainsetMovementPart movementPart, uint tick)

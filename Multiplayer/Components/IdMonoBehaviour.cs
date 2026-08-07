@@ -19,13 +19,14 @@ public abstract class IdMonoBehaviour<T, I> : MonoBehaviour where T : struct whe
         set {
             if (_netId.Equals(value))
                 return;
-            if ((_netId as dynamic).CompareTo(default(T)) != 0)
+            if (RecycleIds && (_netId as dynamic).CompareTo(default(T)) != 0)
                 idPool.ReleaseId(_netId);
             Register(value);
         }
     }
 
     protected abstract bool IsIdServerAuthoritative { get; }
+    protected virtual bool RecycleIds => true;
 
     protected static bool Get(T netId, out IdMonoBehaviour<T, I> obj)
     {
@@ -55,16 +56,31 @@ public abstract class IdMonoBehaviour<T, I> : MonoBehaviour where T : struct whe
 
     public void Register(T id)
     {
+        if ((_netId as dynamic).CompareTo(default(T)) != 0)
+        {
+            if (indexToObject.TryGetValue(_netId, out IdMonoBehaviour<T, I> oldEntry) &&
+                oldEntry == this)
+            {
+                indexToObject.Remove(_netId);
+            }
+        }
+
         _netId = id;
-        indexToObject[id] = this;
+        if ((id as dynamic).CompareTo(default(T)) != 0)
+            indexToObject[id] = this;
     }
 
     protected virtual void OnDestroy()
     {
-        idPool.ReleaseId(NetId);
-        if (!UnloadWatcher.isUnloading)
-            return;
-        idPool.Reset();
-        indexToObject.Clear();
+        if (RecycleIds && (NetId as dynamic).CompareTo(default(T)) != 0)
+            idPool.ReleaseId(NetId);
+        if (indexToObject.TryGetValue(NetId, out IdMonoBehaviour<T, I> entry) && entry == this)
+            indexToObject.Remove(NetId);
+
+        if (UnloadWatcher.isUnloading)
+        {
+            idPool.Reset();
+            indexToObject.Clear();
+        }
     }
 }

@@ -620,7 +620,16 @@ public class NetworkedPluggableObject : IdMonoBehaviour<ushort, NetworkedPluggab
         {
             var target = nonVrGrabAnchor?.GetGrabAnchor();
             Multiplayer.LogDebug(() => $"GrabPlug() NetId: {NetId}, player: {player.Username}, targetPos: {target?.localPos}, targetRot: {target?.localRot}");
-            player.HoldItem(gameObject, target?.localPos, target?.localRot);
+            if (player.RightHandItemGO != null)
+                player.DropItem();
+
+            // VR players already provide a tracked hand pose. The custom grab
+            // anchor remains useful there; desktop replicas should instead put
+            // the physical plug directly in the animated right hand.
+            if (player.IsVR)
+                player.HoldItem(gameObject, target?.localPos, target?.localRot);
+            else
+                player.HoldItem(gameObject);
         }
     }
 

@@ -4,7 +4,19 @@ using System.Collections.Generic;
 
 namespace Multiplayer.Networking.Data.Items;
 
-public class TrackedValue<T>
+internal interface ITrackedValue
+{
+    string Key { get; }
+    bool IsDirty { get; }
+    bool ServerAuthoritative { get; }
+    object GetValueAsObject();
+    bool AcceptsValue(object value);
+    void SetValueFromObject(object value);
+    void MarkClean();
+    string GetDebugString();
+}
+
+public class TrackedValue<T> : ITrackedValue
 {
     private T lastSentValue;
     private Func<T> valueGetter;
@@ -45,6 +57,8 @@ public class TrackedValue<T>
     }
 
     public object GetValueAsObject() => CurrentValue;
+
+    public bool AcceptsValue(object value) => value is T;
 
     public void SetValueFromObject(object value)
     {

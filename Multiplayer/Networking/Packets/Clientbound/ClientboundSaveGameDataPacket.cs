@@ -10,6 +10,7 @@ using Multiplayer.Networking.Data.Items;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 namespace Multiplayer.Networking.Packets.Clientbound;
@@ -35,6 +36,7 @@ public class ClientboundSaveGameDataPacket
     // public string Debt_insurance { get; set; }
 
     public PlayerItemSaveData[] PlayerItems { get; set; }
+    public bool HasSavedPlayerInventory { get; set; }
 
     public float JobManagerTime { get; set; }
 
@@ -62,28 +64,16 @@ public class ClientboundSaveGameDataPacket
             return $"ClientboundSaveGameDataPacket.CreatePacket() UnlockedGen: {{{unlockedGen}}}, PacketGen: {{{packetGen}}},  UnlockedJob: {{{unlockedJob}}}, PacketJob: {{{packetJob}}}";
         });
 
-        List<PlayerItemSaveData> playerItems = [];
-        string[] items = ["shovel", "lighter", "Oiler", "Lantern", "Flashlight", "Hanger", "DuctTape"];
-        string[] states = ["", "", "", "", "{\"Restock\": true,\"Battery_power\": 100}", "", ""];
-
-        for (int i = 0; i < items.Length; i++)
-        {
-            JObject state;
-
-            if (!string.IsNullOrEmpty(states[i]))
-                state = JObject.Parse(states[i]);
-            else
-                state = [];
-
-            var testItem = new PlayerItemSaveData()
-            {
-                ItemPrefabName = items[i],
-                BelongsToPlayer = true,
-                InventorySlotIndex = 14 + i,
-                State = state
-            };
-            playerItems.Add(testItem);
-        }
+        bool hasSavedInventory =
+            NetworkedSaveGameManager.Instance
+                .Server_PreparePlayerInventory(
+                    data,
+                    player,
+                    out IReadOnlyList<StorageItemData>
+                        storedInventory);
+        PlayerItemSaveData[] playerItems = storedInventory
+            .Select(PlayerItemSaveData.FromStorageItemData)
+            .ToArray();
 
         return new ClientboundSaveGameDataPacket
         {
@@ -106,7 +96,8 @@ public class ClientboundSaveGameDataPacket
 
             JobManagerTime = JobsManager.Instance.Time,
 
-            PlayerItems = playerItems.ToArray()
+            PlayerItems = playerItems,
+            HasSavedPlayerInventory = hasSavedInventory,
         };
     }
 

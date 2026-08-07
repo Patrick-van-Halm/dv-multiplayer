@@ -143,9 +143,17 @@ public static class DvExtensions
 
     public static bool PlayerCanReach(this Transform item, ServerPlayer player, float extraRange = 0f)
     {
+        return item.transform.position.PlayerCanReach(player, extraRange);
+    }
+
+    public static bool PlayerCanReach(
+        this Vector3 position,
+        ServerPlayer player,
+        float extraRange = 0f)
+    {
         float reachRange = AKeyboardInput.XZ_SQR_REACH_RANGE + GrabberRaycasterDV.FPS_INTERACTION_RANGE_SQR + (extraRange * extraRange);
 
-        var delta = player.WorldPosition - item.transform.position;
+        var delta = player.WorldPosition - position;
 
         if (Mathf.Abs(delta.y) > AKeyboardInput.Y_REACH_RANGE)
             return false;
@@ -155,6 +163,26 @@ public static class DvExtensions
         float sqrMag = (delta).sqrMagnitude;
 
         return sqrMag <= reachRange;
+    }
+
+    public static bool IsFinite(this Vector3 value)
+    {
+        return value.x.IsFinite() &&
+               value.y.IsFinite() &&
+               value.z.IsFinite();
+    }
+
+    public static bool IsFinite(this Quaternion value)
+    {
+        return value.x.IsFinite() &&
+               value.y.IsFinite() &&
+               value.z.IsFinite() &&
+               value.w.IsFinite();
+    }
+
+    public static bool IsFinite(this float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
     public static Vector3 GetWorldAbsolutePosition(this GameObject go)

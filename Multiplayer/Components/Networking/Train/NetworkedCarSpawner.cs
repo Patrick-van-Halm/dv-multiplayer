@@ -58,20 +58,34 @@ public static class NetworkedCarSpawner
 
     private static NetworkedTrainCar SpawnCar(TrainsetSpawnPart spawnPart, bool preventCoupling = false)
     {
+        UnityDebug(
+            $"SpawnCar begin id={spawnPart.CarId} guid={spawnPart.CarGuid} " +
+            $"netId={spawnPart.NetId} livery={spawnPart.LiveryId} " +
+            $"tracks=({spawnPart.Bogie1.TrackNetId},{spawnPart.Bogie2.TrackNetId})");
+
         if (!NetworkedRailTrack.TryGet(spawnPart.Bogie1.TrackNetId, out NetworkedRailTrack bogie1Track) && spawnPart.Bogie1.TrackNetId != 0)
         {
+            UnityDebugWarning(
+                $"SpawnCar skipped id={spawnPart.CarId} guid={spawnPart.CarGuid} " +
+                $"netId={spawnPart.NetId}: missing track {spawnPart.Bogie1.TrackNetId}");
             NetworkLifecycle.Instance.Client.LogDebug(() => $"Tried spawning car but couldn't find track with index {spawnPart.Bogie1.TrackNetId}");
             return null;
         }
 
         if (!NetworkedRailTrack.TryGet(spawnPart.Bogie2.TrackNetId, out NetworkedRailTrack bogie2Track) && spawnPart.Bogie2.TrackNetId != 0)
         {
+            UnityDebugWarning(
+                $"SpawnCar skipped id={spawnPart.CarId} guid={spawnPart.CarGuid} " +
+                $"netId={spawnPart.NetId}: missing track {spawnPart.Bogie2.TrackNetId}");
             NetworkLifecycle.Instance.Client.LogDebug(() => $"Tried spawning car but couldn't find track with index {spawnPart.Bogie2.TrackNetId}");
             return null;
         }
 
         if (!TrainComponentLookup.Instance.LiveryFromId(spawnPart.LiveryId, out TrainCarLivery livery))
         {
+            UnityDebugWarning(
+                $"SpawnCar skipped id={spawnPart.CarId} guid={spawnPart.CarGuid} " +
+                $"netId={spawnPart.NetId}: missing livery {spawnPart.LiveryId}");
             NetworkLifecycle.Instance.Client.LogDebug(() => $"Tried spawning car but couldn't find TrainCarLivery with ID {spawnPart.LiveryId}");
             return null;
         }
@@ -82,6 +96,10 @@ public static class NetworkedCarSpawner
         trainCar.playerSpawnedCar = spawnPart.PlayerSpawnedCar;
         trainCar.uniqueCar = false;
         trainCar.InitializeExistingLogicCar(spawnPart.CarId, spawnPart.CarGuid);
+        UnityDebug(
+            $"SpawnCar initialized id={spawnPart.CarId} guid={spawnPart.CarGuid} " +
+            $"netId={spawnPart.NetId} actualId={trainCar.ID} " +
+            $"logicCar={trainCar.logicCar != null} object={trainCar.gameObject.name}");
 
         //set health data
         if (spawnPart.Exploded)
@@ -116,6 +134,10 @@ public static class NetworkedCarSpawner
         //Add networked components
         NetworkedTrainCar networkedTrainCar = trainCar.gameObject.GetOrAddComponent<NetworkedTrainCar>();
         networkedTrainCar.NetId = spawnPart.NetId;
+        UnityDebug(
+            $"SpawnCar networked id={spawnPart.CarId} netId={spawnPart.NetId} " +
+            $"currentId={networkedTrainCar.CurrentID} " +
+            $"logicCar={trainCar.logicCar != null}");
 
         //Setup positions and bogies
         Transform trainTransform = trainCar.transform;
@@ -140,7 +162,24 @@ public static class NetworkedCarSpawner
 
         CarSpawner.Instance.FireCarSpawned(trainCar);
 
+        UnityDebug(
+            $"SpawnCar ready id={spawnPart.CarId} netId={spawnPart.NetId} " +
+            $"currentId={networkedTrainCar.CurrentID} " +
+            $"logicCar={trainCar.logicCar != null}");
+
         return networkedTrainCar;
+    }
+
+    private static void UnityDebug(string message)
+    {
+        if (Multiplayer.Settings?.DebugLogging == true)
+            Debug.Log($"[MultiplayerDebug] {message}");
+    }
+
+    private static void UnityDebugWarning(string message)
+    {
+        if (Multiplayer.Settings?.DebugLogging == true)
+            Debug.LogWarning($"[MultiplayerDebug] {message}");
     }
 
     private static void Couple(in TrainsetSpawnPart spawnPart, TrainCar trainCar, bool autoCouple)

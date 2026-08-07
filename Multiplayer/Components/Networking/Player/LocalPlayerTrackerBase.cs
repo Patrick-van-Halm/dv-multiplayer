@@ -76,7 +76,9 @@ public abstract class LocalPlayerTrackerBase : MonoBehaviour
             isOnCar = car != null;
         }
 
-        Vector3 position = isOnCar ? PlayerManager.PlayerTransform.localPosition : PlayerManager.PlayerTransform.GetWorldAbsolutePosition();
+        Vector3 position = isOnCar
+            ? car.transform.InverseTransformPoint(PlayerManager.PlayerTransform.position)
+            : PlayerManager.PlayerTransform.GetWorldAbsolutePosition();
         float rotationY = PlayerManager.PlayerCamera.transform.eulerAngles.y;
 
         float rawHeadPitch = GetHeadPitch();

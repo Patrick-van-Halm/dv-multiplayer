@@ -82,6 +82,13 @@ public class NetworkClient : NetworkManager
     private ITransportPeer serverPeer;
     public float RPC_Timeout => (Ping * 8f) / 1000;
 
+    internal bool CanSendGameplayPackets =>
+        IsRunning &&
+        serverPeer != null &&
+        (LoadingState >= PlayerLoadingState.Complete ||
+         NetworkLifecycle.Instance?.IsHost() == true &&
+         WorldStreamingInit.isLoaded);
+
     private ChatGUI chatGUI;
     private readonly bool isSinglePlayer;
 
@@ -210,16 +217,19 @@ public class NetworkClient : NetworkManager
         netPacketProcessor.SubscribeReusable<CommonHandbrakePositionPacket>(OnCommonHandbrakePositionPacket);
         netPacketProcessor.SubscribeReusable<ClientboundBrakeStateUpdatePacket>(OnClientboundBrakeStateUpdatePacket);
 
+        netPacketProcessor.SubscribeReusable<CommonControlHandPacket>(OnCommonControlHandPacket);
         netPacketProcessor.SubscribeReusable<CommonCouplerInteractionPacket>(OnCommonCouplerInteractionPacket);
         netPacketProcessor.SubscribeReusable<CommonTrainUncouplePacket>(OnCommonTrainUncouplePacket);
         netPacketProcessor.SubscribeReusable<CommonHoseConnectedPacket>(OnCommonHoseConnectedPacket);
         netPacketProcessor.SubscribeReusable<CommonHoseDisconnectedPacket>(OnCommonHoseDisconnectedPacket);
+        netPacketProcessor.SubscribeReusable<CommonHoseConnectorDragPacket>(OnCommonHoseConnectorDragPacket);
         netPacketProcessor.SubscribeReusable<CommonCockFiddlePacket>(OnCommonCockFiddlePacket);
 
         netPacketProcessor.SubscribeReusable<CommonMuConnectedPacket>(OnCommonMuConnectedPacket);
         netPacketProcessor.SubscribeReusable<CommonMuDisconnectedPacket>(OnCommonMuDisconnectedPacket);
 
         netPacketProcessor.SubscribeReusable<CommonPaintThemePacket>(OnCommonPaintThemePacket);
+        netPacketProcessor.SubscribeReusable<CommonCustomizationHolePacket>(OnCommonCustomizationHolePacket);
         netPacketProcessor.SubscribeReusable<ClientboundRestorationStateChangePacket>(OnClientboundRestorationStateChangePacket);
 
         netPacketProcessor.SubscribeReusable<ClientboundTrainControlAuthorityUpdatePacket>(OnClientboundTrainControlAuthorityUpdatePacket);
@@ -362,7 +372,7 @@ public class NetworkClient : NetworkManager
         }
 
         // Artificial delay to allow cargo to be loaded prior to applying restoration states
-        yield return new WaitForSeconds(0.5f);
+        yield return new WaitForSecondsRealtime(0.5f);
 
         // Trainsets spawned, apply restoration states for demonstrators
         NetworkedCarSpawner.ApplyRestorationStates();
@@ -372,7 +382,7 @@ public class NetworkClient : NetworkManager
          */
 
         //TODO: implement
-        yield return new WaitForSeconds(0.25f);
+        yield return new WaitForSecondsRealtime(0.25f);
 
         /* 
          * ReadyForItems
@@ -381,7 +391,7 @@ public class NetworkClient : NetworkManager
         Log($"Train sets spawned, requesting items");
         SendLoadStateUpdate(PlayerLoadingState.ReadyForItems);
 
-        yield return new WaitForSeconds(0.25f);
+        yield return new WaitForSecondsRealtime(0.25f);
 
         /* 
          * ReadyForJobs
@@ -390,7 +400,7 @@ public class NetworkClient : NetworkManager
         Log($"Requesting jobs");
         SendLoadStateUpdate(PlayerLoadingState.ReadyForJobs);
 
-        yield return new WaitForSeconds(0.25f);
+        yield return new WaitForSecondsRealtime(0.25f);
 
 
         /* 
@@ -400,11 +410,11 @@ public class NetworkClient : NetworkManager
         Log($"Requesting Hazmat Tiles");
         SendLoadStateUpdate(PlayerLoadingState.ReadyForTiles);
 
-        yield return new WaitForSeconds(0.5f);
+        yield return new WaitForSecondsRealtime(0.5f);
 
         SendLoadStateUpdate(PlayerLoadingState.Complete);
         displayLoadingInfo.OnLoadingStatusChanged("Complete", false, ((float)LoadingState / (float)PlayerLoadingState.Complete) * 100);
-        yield return new WaitForSeconds(0.25f);
+        yield return new WaitForSecondsRealtime(0.25f);
     }
 
     public ClientPlayerWrapper GetWrapper(NetworkedPlayer networkedPlayer)
@@ -812,6 +822,60 @@ public class NetworkClient : NetworkManager
         netTrainCar.Common_ReceiveCouplerInteraction(packet);
     }
 
+    private void OnCommonControlHandPacket(
+        CommonControlHandPacket packet)
+    {
+        if (!ClientPlayerManager.TryGetPlayer(
+                packet.PlayerId,
+                out NetworkedPlayer player))
+        {
+            return;
+        }
+
+        Vector3 targetPosition =
+            NetworkedItem.ToWorldPosition(packet.TargetPosition);
+        bool targetsHeldItem =
+            player.IsHeldItemInteraction(targetPosition);
+
+        if (Multiplayer.Settings?.DebugLogging == true)
+        {
+            Debug.Log(
+                $"[MultiplayerDebug] RemoteIK control packet " +
+                $"player={player.Username} interaction={packet.Interaction} " +
+                $"target={targetPosition} heldItem={player.RightHandItemGO?.name ?? "none"} " +
+                $"targetsHeldItem={targetsHeldItem}");
+        }
+
+        switch (packet.Interaction)
+        {
+            case ControlHandInteraction.Grab:
+                if (targetsHeldItem)
+                {
+                    // Equipping/grabbing a handheld item is not a world
+                    // control interaction. The item is aligned to the idle
+                    // hand by NetworkedPlayerHeldItem; moving the hand to the
+                    // item's old world point causes the helicopter-blade IK.
+                    player.ClearControlHandIK();
+                }
+                else
+                {
+                    player.SetControlHandIK(targetPosition);
+                }
+                break;
+            case ControlHandInteraction.Ungrab:
+                player.ClearControlHandIK();
+                break;
+            case ControlHandInteraction.Use:
+                // A use is a transient animation pose. Clear any stale grab
+                // target first, pulse IK for the use, then let the animator
+                // return the hand to idle.
+                if (targetsHeldItem)
+                    player.ClearControlHandIK();
+                player.PulseControlHandIK(targetPosition);
+                break;
+        }
+    }
+
     //private void OnCommonTrainCouplePacket(CommonTrainCouplePacket packet)
     //{
     //    TrainCar trainCar = null;
@@ -904,6 +968,25 @@ public class NetworkClient : NetworkManager
         Coupler coupler = packet.IsFront ? trainCar.frontCoupler : trainCar.rearCoupler;
 
         coupler.DisconnectAirHose(packet.PlayAudio);
+    }
+
+    private void OnCommonHoseConnectorDragPacket(
+        CommonHoseConnectorDragPacket packet)
+    {
+        NetworkedHoseConnectorDrag.ApplyRemoteDrag(packet);
+    }
+
+    private void OnCommonCustomizationHolePacket(
+        CommonCustomizationHolePacket packet)
+    {
+        NetworkedCustomizationHoles.ApplyRemote(packet);
+    }
+
+    public void SendCustomizationHole(CommonCustomizationHolePacket packet)
+    {
+        SendNetSerializablePacketToServer(
+            packet,
+            DeliveryMethod.ReliableOrdered);
     }
 
     private void OnCommonMuConnectedPacket(CommonMuConnectedPacket packet)
@@ -1435,7 +1518,7 @@ public class NetworkClient : NetworkManager
 
         Log($"Cash Register With Modules Action received for {netCashRegister.GetObjectPath()}, Action: {packet.Action}, Amount: {packet.Amount}");
 
-        netCashRegister.Client_ProcessCashRegisterAction(packet.Action, packet.Amount);
+        netCashRegister.Client_ProcessCashRegisterAction(packet);
     }
 
     private void OnCommonGenericSwitchStatePacket(CommonGenericSwitchStatePacket packet)
@@ -1540,12 +1623,18 @@ public class NetworkClient : NetworkManager
         }, DeliveryMethod.ReliableOrdered);
     }
 
-    public void SendCouplerInteraction(CouplerInteractionType flags, Coupler coupler, Coupler otherCoupler = null)
+    public void SendCouplerInteraction(
+        CouplerInteractionType flags,
+        Coupler coupler,
+        Coupler otherCoupler = null,
+        ushort remoteItemNetId = 0)
     {
         ushort couplerNetId = coupler?.train?.GetNetId() ?? 0;
         ushort otherCouplerNetId = otherCoupler?.train?.GetNetId() ?? 0;
         bool couplerIsFront = coupler?.isFrontCoupler ?? false;
         bool otherCouplerIsFront = otherCoupler?.isFrontCoupler ?? false;
+        Transform trainTransform = coupler?.train?.transform;
+        Transform knob = coupler?.ChainScript?.knob?.transform;
 
         if (couplerNetId == 0)
         {
@@ -1565,9 +1654,21 @@ public class NetworkClient : NetworkManager
             NetId = couplerNetId,
             IsFrontCoupler = couplerIsFront,
             OtherNetId = otherCouplerNetId,
+            RemoteItemNetId = remoteItemNetId,
             IsFrontOtherCoupler = otherCouplerIsFront,
             Flags = (ushort)flags,
-        }, DeliveryMethod.ReliableOrdered);
+            HandTargetLocalPosition =
+                trainTransform != null && knob != null
+                    ? trainTransform.InverseTransformPoint(knob.position)
+                    : Vector3.zero,
+            HandTargetLocalRotation =
+                trainTransform != null && knob != null
+                    ? Quaternion.Inverse(trainTransform.rotation) *
+                      knob.rotation
+                    : Quaternion.identity,
+        }, flags == CouplerInteractionType.DragPoseUpdate
+            ? DeliveryMethod.Sequenced
+            : DeliveryMethod.ReliableOrdered);
     }
 
 
@@ -1884,12 +1985,83 @@ public class NetworkClient : NetworkManager
 
     public void SendItemsChangePacket(List<ItemUpdateData> items)
     {
-        Log($"Sending CommonItemChangePacket with {items.Count()} items");
-        //SendPacketToServer(new CommonItemChangePacket { Items = items },
-        //    DeliveryMethod.ReliableUnordered);
+        Log($"Sending {items.Count} item snapshots");
+        foreach (CommonItemChangePacket packet in CommonItemChangePacket.CreateBatches(items))
+            SendNetSerializablePacketToServer(packet, DeliveryMethod.ReliableOrdered);
+    }
 
-        SendNetSerializablePacketToServer(new CommonItemChangePacket { Items = items },
-                DeliveryMethod.ReliableOrdered);
+    public void SendControlHandInteraction(
+        ControlHandInteraction interaction,
+        Vector3 targetPosition)
+    {
+        SendPacketToServer(
+            new CommonControlHandPacket
+            {
+                Interaction = interaction,
+                TargetPosition = targetPosition,
+            },
+            DeliveryMethod.ReliableOrdered);
+    }
+
+    public void SendHoseConnectorDrag(CouplingHoseRig rig, bool grabbed)
+    {
+        if (rig?.adapter == null)
+            return;
+
+        TrainCar trainCar;
+        bool isFront;
+        bool isMultipleUnit;
+
+        if (rig.adapter is CouplingHoseCouplerAdapter airAdapter)
+        {
+            trainCar = airAdapter.coupler?.train;
+            isFront = airAdapter.coupler?.isFrontCoupler ?? false;
+            isMultipleUnit = false;
+        }
+        else if (rig.adapter is CouplingHoseMultipleUnitAdapter muAdapter)
+        {
+            trainCar = muAdapter.muCable?.muModule?.train;
+            isFront = muAdapter.muCable?.isFront ?? false;
+            isMultipleUnit = true;
+        }
+        else
+        {
+            return;
+        }
+
+        ushort netId = trainCar?.GetNetId() ?? 0;
+        if (netId == 0)
+            return;
+
+        SendPacketToServer(
+            new CommonHoseConnectorDragPacket
+            {
+                NetId = netId,
+                IsFront = isFront,
+                IsMultipleUnit = isMultipleUnit,
+                Grabbed = grabbed,
+            },
+            DeliveryMethod.ReliableOrdered);
+    }
+
+    public void SendJobPaymentClaim(ushort itemNetId)
+    {
+        SendPacketToServer(
+            new ServerboundJobPaymentClaimPacket { ItemNetId = itemNetId },
+            DeliveryMethod.ReliableOrdered);
+    }
+
+    public void SendLocomotiveRemotePairRequest(
+        ushort remoteItemNetId,
+        ushort locomotiveNetId)
+    {
+        SendPacketToServer(
+            new ServerboundLocomotiveRemotePairPacket
+            {
+                RemoteItemNetId = remoteItemNetId,
+                LocomotiveNetId = locomotiveNetId,
+            },
+            DeliveryMethod.ReliableOrdered);
     }
 
     public void SendPaintThemeChange(NetworkedTrainCar netTraincar, TrainCarPaint.Target targetArea, uint themeId)
@@ -1899,14 +2071,19 @@ public class NetworkClient : NetworkManager
         SendPacketToServer(new CommonPaintThemePacket { NetId = netTraincar.NetId, TargetArea = targetArea, PaintThemeId = themeId }, DeliveryMethod.ReliableUnordered);
     }
 
-    public void SendCashRegisterAction(ushort netId, CashRegisterAction action, double amount = 0.0f)
+    public void SendCashRegisterAction(
+        ushort netId,
+        CashRegisterAction action,
+        double amount = 0.0f,
+        int moduleIndex = -1)
     {
         SendPacketToServer(
             new CommonCashRegisterWithModulesActionPacket
             {
                 NetId = netId,
                 Action = action,
-                Amount = amount
+                Amount = amount,
+                ModuleIndex = moduleIndex,
             },
             DeliveryMethod.ReliableOrdered
         );

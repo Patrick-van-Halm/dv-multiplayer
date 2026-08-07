@@ -1,11 +1,6 @@
 using DV.RemoteControls;
 using HarmonyLib;
-using Multiplayer.Components.Networking;
-using Multiplayer.Networking.Data.Train;
-using Multiplayer.Utils;
-using System;
-using UnityEngine;
-
+using Multiplayer.Components.Networking.Train;
 
 namespace Multiplayer.Patches.World.Items;
 
@@ -16,29 +11,13 @@ public static class RemoteControllerModulePatch
     [HarmonyPostfix]
     static void RemoteControllerCouple(RemoteControllerModule __instance)
     {
-        NetworkLifecycle.Instance.Client.SendCouplerInteraction((CouplerInteractionType.Start | CouplerInteractionType.CoupleViaRemote), __instance.car.frontCoupler);
+        NetworkedRemoteCoupler.SendCouple(__instance);
     }
 
     [HarmonyPatch(nameof(RemoteControllerModule.Uncouple))]
     [HarmonyPrefix]
     static void Uncouple(RemoteControllerModule __instance, int selectedCoupler)
     {
-        Multiplayer.LogDebug(() => $"RemoteControllerModule.Uncouple({selectedCoupler})");
-
-        TrainCar startCar = __instance.car;
-
-        if (startCar == null)
-        {
-            Multiplayer.LogWarning($"Trying to Uncouple from Remote with no paired loco");
-            return;
-        }
-
-        Coupler nthCouplerFrom = CouplerLogic.GetNthCouplerFrom((selectedCoupler > 0) ? startCar.frontCoupler : startCar.rearCoupler, Mathf.Abs(selectedCoupler) - 1);
-
-        Multiplayer.LogDebug(() => $"RemoteControllerModule.Uncouple({startCar?.ID}, {selectedCoupler}) nthCouplerFrom: [{nthCouplerFrom?.train?.ID}, {nthCouplerFrom?.train?.GetNetId()}]");
-        if (nthCouplerFrom != null)
-        {
-            NetworkLifecycle.Instance.Client.SendCouplerInteraction((CouplerInteractionType.Start | CouplerInteractionType.UncoupleViaRemote), nthCouplerFrom);
-        }
+        NetworkedRemoteCoupler.SendUncouple(__instance, selectedCoupler);
     }
 }

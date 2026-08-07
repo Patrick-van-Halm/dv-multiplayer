@@ -19,6 +19,8 @@ using Multiplayer.Components.Networking;
 using Multiplayer.Components.Networking.Jobs;
 using Multiplayer.Components.Networking.Train;
 using Multiplayer.Components.Networking.World;
+using Multiplayer.Components.Networking.World.Items;
+using Multiplayer.Components.SaveGame;
 using Multiplayer.Networking.Data;
 using Multiplayer.Networking.Data.Items;
 using Multiplayer.Networking.Data.Jobs;
@@ -54,7 +56,6 @@ public class NetworkServer : NetworkManager
 {
     private const int WEATHER_UPDATE_INTERVAL = 30; //seconds
     private const int HIGH_PING_LOG_INTERVAL = 60; //only log high ping once every 60 seconds per player
-
     public Action<ServerPlayer> PlayerConnected;
     public Action<ServerPlayer> PlayerDisconnected;
     public Action<ServerPlayer> PlayerReady;
@@ -206,13 +207,16 @@ public class NetworkServer : NetworkManager
         netPacketProcessor.SubscribeReusable<CommonTrainPortsPacket, ITransportPeer>(OnCommonTrainPortsPacket);
         netPacketProcessor.SubscribeReusable<CommonTrainFusesPacket, ITransportPeer>(OnCommonTrainFusesPacket);
         netPacketProcessor.SubscribeReusable<CommonPaintThemePacket, ITransportPeer>(OnCommonPaintThemePacket);
+        netPacketProcessor.SubscribeReusable<CommonCustomizationHolePacket, ITransportPeer>(OnCommonCustomizationHolePacket);
 
         // Train Interaction
         netPacketProcessor.SubscribeReusable<ServerboundTrainControlAuthorityPacket, ITransportPeer>(OnServerboundTrainControlAuthorityPacket);
+        netPacketProcessor.SubscribeReusable<CommonControlHandPacket, ITransportPeer>(OnCommonControlHandPacket);
         netPacketProcessor.SubscribeReusable<CommonCouplerInteractionPacket, ITransportPeer>(OnCommonCouplerInteractionPacket);
         netPacketProcessor.SubscribeReusable<CommonTrainUncouplePacket, ITransportPeer>(OnCommonTrainUncouplePacket);
         netPacketProcessor.SubscribeReusable<CommonHoseConnectedPacket, ITransportPeer>(OnCommonHoseConnectedPacket);
         netPacketProcessor.SubscribeReusable<CommonHoseDisconnectedPacket, ITransportPeer>(OnCommonHoseDisconnectedPacket);
+        netPacketProcessor.SubscribeReusable<CommonHoseConnectorDragPacket, ITransportPeer>(OnCommonHoseConnectorDragPacket);
         netPacketProcessor.SubscribeReusable<CommonMuConnectedPacket, ITransportPeer>(OnCommonMuConnectedPacket);
         netPacketProcessor.SubscribeReusable<CommonMuDisconnectedPacket, ITransportPeer>(OnCommonMuDisconnectedPacket);
         netPacketProcessor.SubscribeReusable<CommonCockFiddlePacket, ITransportPeer>(OnCommonCockFiddlePacket);
@@ -233,6 +237,8 @@ public class NetworkServer : NetworkManager
 
         // Items
         netPacketProcessor.SubscribeNetSerializable<CommonItemChangePacket, ITransportPeer>(OnCommonItemChangePacket);
+        netPacketProcessor.SubscribeReusable<ServerboundJobPaymentClaimPacket, ITransportPeer>(OnServerboundJobPaymentClaimPacket);
+        netPacketProcessor.SubscribeReusable<ServerboundLocomotiveRemotePairPacket, ITransportPeer>(OnServerboundLocomotiveRemotePairPacket);
     }
 
     //allow mods to register their own packets
@@ -333,10 +339,16 @@ public class NetworkServer : NetworkManager
     {
         LogDebug(() => $"OnPeerDisconnected({peer.Id})");
         if (!peerToPlayer.TryGetValue(peer, out ServerPlayer player))
+        {
             LogWarning($"Peer {peer.GetType()}, peerId: {peer.Id} disconnected but no player found");
-        else
-            Log($"Player {player?.Username} disconnected: {disconnectReason}");
+            return;
+        }
+        Log($"Player {player.Username} disconnected: {disconnectReason}");
 
+        IReadOnlyList<NetworkedItem> inventoryItems =
+            NetworkedSaveGameManager.Instance
+                ?.Server_FreezePlayerInventory(player) ??
+            Array.Empty<NetworkedItem>();
         if (WorldStreamingInit.isLoaded)
             SaveGameManager.Instance.UpdateInternalData();
 
@@ -356,6 +368,12 @@ public class NetworkServer : NetworkManager
 
         PlayerDisconnected?.Invoke(player);
 
+        foreach (NetworkedItem item in inventoryItems)
+        {
+            if (item != null)
+                UnityEngine.Object.Destroy(item.gameObject);
+        }
+        NetworkedItemManager.Instance?.RemovePlayerRequestState(player.Guid);
         player?.Dispose();
     }
 
@@ -447,6 +465,35 @@ public class NetworkServer : NetworkManager
         {
             if (peer == excludePeer || (excludeSelf && peer == SelfPeer))
                 continue;
+            peer?.Send(writer, deliveryMethod);
+        }
+    }
+
+    private void SendNetSerializablePacketToAll<T>(
+        T packet,
+        DeliveryMethod deliveryMethod,
+        PlayerLoadingState minimumLoadState,
+        ITransportPeer excludePeer,
+        bool excludeSelf = false)
+        where T : INetSerializable, new()
+    {
+        NetDataWriter writer = WriteNetSerializablePacket(packet);
+        foreach (ITransportPeer peer in peers.Values)
+        {
+            if (peer == excludePeer ||
+                (excludeSelf && peer == SelfPeer))
+            {
+                continue;
+            }
+
+            if (TryGetServerPlayer(
+                    peer,
+                    out ServerPlayer player) &&
+                player.LoadingState < minimumLoadState)
+            {
+                continue;
+            }
+
             peer?.Send(writer, deliveryMethod);
         }
     }
@@ -969,13 +1016,12 @@ public class NetworkServer : NetworkManager
 
     public void SendItemsChangePacket(List<ItemUpdateData> items, ServerPlayer player)
     {
-        Log($"Sending SendItemsChangePacket with {items.Count()} items to {player.Username}");
+        if (player.Peer == null || player.Peer == SelfPeer)
+            return;
 
-        if (player.Peer != null && player.Peer != SelfPeer)
-        {
-            SendNetSerializablePacket(player.Peer, new CommonItemChangePacket { Items = items },
-                DeliveryMethod.ReliableOrdered);
-        }
+        Log($"Sending {items.Count} item snapshots to {player.Username}");
+        foreach (CommonItemChangePacket packet in CommonItemChangePacket.CreateBatches(items))
+            SendNetSerializablePacket(player.Peer, packet, DeliveryMethod.ReliableOrdered);
     }
 
     public void SendPitStopBulkDataPacket(ushort netId, int carCount, int carIndex, int faucetNotch, LocoResourceModuleData[] stationData, PitStopPlugData[] plugData, ServerPlayer player)
@@ -1311,6 +1357,27 @@ public class NetworkServer : NetworkManager
 
             case PlayerLoadingState.ReadyForItems:
                 // Send Inventory and world items
+                foreach (CommonCustomizationHolePacket holeSnapshot in
+                         NetworkedCustomizationHoles
+                             .CreateFullSnapshots())
+                {
+                    SendNetSerializablePacket(
+                        peer,
+                        holeSnapshot,
+                        DeliveryMethod.ReliableOrdered);
+                }
+
+                foreach (
+                    CommonCashRegisterWithModulesActionPacket
+                        registerSnapshot in
+                    NetworkedCashRegisterWithModules
+                        .CreateShopStateSnapshots())
+                {
+                    SendPacket(
+                        peer,
+                        registerSnapshot,
+                        DeliveryMethod.ReliableOrdered);
+                }
 
                 break;
 
@@ -1399,6 +1466,8 @@ public class NetworkServer : NetworkManager
             }
 
             SendPacket(peer, new ClientboundRemoveLoadingScreenPacket(), DeliveryMethod.ReliableOrdered);
+            NetworkedSaveGameManager.Instance
+                ?.Server_MarkPlayerInventoryEstablished(player);
             PlayerReady?.Invoke(player);
         }
     }
@@ -1501,13 +1570,27 @@ public class NetworkServer : NetworkManager
         //todo: add validation that to ensure the client is near the coupler - this packet may also be used for remote operations and may need to factor that in in the future
         if (NetworkedTrainCar.TryGet(packet.NetId, out NetworkedTrainCar netTrainCar))
         {
+            packet.PlayerId = player.PlayerId;
             if (netTrainCar.Server_ValidateCouplerInteraction(packet, player))
             {
                 //passed validation, send to all but the originator
-                SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForTrainSets, peer);
+                SendPacketToAll(
+                    packet,
+                    (CouplerInteractionType)packet.Flags ==
+                        CouplerInteractionType.DragPoseUpdate
+                        ? DeliveryMethod.Sequenced
+                        : DeliveryMethod.ReliableOrdered,
+                    PlayerLoadingState.ReadyForTrainSets,
+                    peer);
             }
             else
             {
+                if ((CouplerInteractionType)packet.Flags ==
+                    CouplerInteractionType.DragPoseUpdate)
+                {
+                    return;
+                }
+
                 LogDebug(() => $"OnCommonCouplerInteractionPacket([{packet.Flags}, {netTrainCar.CurrentID}, {packet.NetId}], {player.PlayerId}) Sending validation failure");
                 //failed validation notify client
                 SendPacket
@@ -1549,6 +1632,72 @@ public class NetworkServer : NetworkManager
     private void OnCommonHoseDisconnectedPacket(CommonHoseDisconnectedPacket packet, ITransportPeer peer)
     {
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForTrainSets, peer);
+    }
+
+    private void OnCommonControlHandPacket(
+        CommonControlHandPacket packet,
+        ITransportPeer peer)
+    {
+        if (packet == null ||
+            !TryGetServerPlayer(peer, out ServerPlayer player) ||
+            !System.Enum.IsDefined(
+                typeof(ControlHandInteraction),
+                packet.Interaction) ||
+            !packet.TargetPosition.IsFinite() ||
+            !NetworkedItem.ToWorldPosition(packet.TargetPosition)
+                .PlayerCanReach(player))
+        {
+            return;
+        }
+
+        packet.PlayerId = player.PlayerId;
+        SendPacketToAll(
+            packet,
+            DeliveryMethod.ReliableOrdered,
+            PlayerLoadingState.ReadyForTrainSets,
+            peer);
+    }
+
+    private void OnCommonHoseConnectorDragPacket(
+        CommonHoseConnectorDragPacket packet,
+        ITransportPeer peer)
+    {
+        if (!peerToPlayer.TryGetValue(peer, out ServerPlayer player) ||
+            !NetworkedHoseConnectorDrag
+                .ValidateClientDrag(
+                    packet,
+                    player.WorldPosition))
+        {
+            return;
+        }
+
+        packet.PlayerId = player.PlayerId;
+        SendPacketToAll(
+            packet,
+            DeliveryMethod.ReliableOrdered,
+            PlayerLoadingState.ReadyForTrainSets,
+            peer);
+    }
+
+    private void OnCommonCustomizationHolePacket(
+        CommonCustomizationHolePacket packet,
+        ITransportPeer peer)
+    {
+        if (!peerToPlayer.TryGetValue(
+                peer,
+                out ServerPlayer player) ||
+            !NetworkedCustomizationHoles.ValidateClientPacket(
+                packet,
+                player.WorldPosition))
+        {
+            return;
+        }
+
+        SendNetSerializablePacketToAll(
+            packet,
+            DeliveryMethod.ReliableOrdered,
+            PlayerLoadingState.ReadyForWorldState,
+            peer);
     }
 
     private void OnCommonMuConnectedPacket(CommonMuConnectedPacket packet, ITransportPeer peer)
@@ -2095,41 +2244,94 @@ public class NetworkServer : NetworkManager
 
     private void OnCommonItemChangePacket(CommonItemChangePacket packet, ITransportPeer peer)
     {
-        //if(!TryGetServerPlayer(peer, out var player))
-        //    return;
+        if (!TryGetServerPlayer(peer, out var player) ||
+            packet?.Items == null)
+            return;
+        if (packet.Items.Count == 0 ||
+            packet.Items.Count > ItemPacketLimits.MaxSnapshots)
+        {
+            LogWarning(
+                $"Rejected item update packet containing {packet.Items.Count} snapshots from {player.Username}.");
+            return;
+        }
 
-        //LogDebug(()=>$"OnCommonItemChangePacket({packet?.Items?.Count}, {peer.Id} (\"{player.Username}\"))");
+        foreach (ItemUpdateData snapshot in packet.Items)
+        {
+            if (snapshot == null)
+                continue;
 
-        //LogDebug(() =>
-        //{
-        //    string debug = "";
+            if (snapshot.ItemState == ItemState.InHand ||
+                snapshot.ItemState == ItemState.InInventory ||
+                !NetworkedItem.TryGet(snapshot.ItemNetId, out NetworkedItem item) ||
+                item.LastOwnerId == 0)
+            {
+                snapshot.Player = player.PlayerId;
+            }
+            else
+            {
+                // A drop/use update retains the player established by the most
+                // recent grab instead of trusting a client-supplied owner ID.
+                snapshot.Player = item.LastOwnerId;
+            }
+        }
 
-        //    foreach (var item in packet?.Items)
-        //    {
-        //        debug += "UpdateType: " + item?.UpdateType + "\r\n";
-        //        debug += "itemNetId: " + item?.ItemNetId + "\r\n";
-        //        debug += "PrefabName: " + item?.PrefabName + "\r\n";
-        //        debug += "Equipped: " + item?.ItemState + "\r\n";
-        //        debug += "Position: " + item?.ItemPosition + "\r\n";
-        //        debug += "Rotation: " + item?.ItemRotation + "\r\n";
-        //        debug += "ThrowDirection: " + item?.ThrowDirection + "\r\n";
-        //        debug += "Player: " + item?.Player + "\r\n";
-        //        debug += "CarNetId: " + item?.CarNetId + "\r\n";
-        //        debug += "AttachedFront: " + item?.AttachedFront + "\r\n";
+        NetworkedItemManager.Instance.ReceiveSnapshots(packet.Items, player);
+    }
 
-        //        debug += "States:";
+    private void OnServerboundJobPaymentClaimPacket(
+        ServerboundJobPaymentClaimPacket packet,
+        ITransportPeer peer)
+    {
+        if (packet == null ||
+            !TryGetServerPlayer(peer, out ServerPlayer player) ||
+            !NetworkedItemManager.Instance.TryClaimJobPayment(packet.ItemNetId, player))
+        {
+            LogWarning($"Rejected job payment claim for item {packet?.ItemNetId ?? 0}.");
+        }
+    }
 
-        //        if (item.States != null)
-        //            foreach (var state in item?.States)
-        //                debug += "\r\n\t" + state.Key + ": " + state.Value;
-        //    }
+    private void OnServerboundLocomotiveRemotePairPacket(
+        ServerboundLocomotiveRemotePairPacket packet,
+        ITransportPeer peer)
+    {
+        if (!TryGetServerPlayer(
+                peer,
+                out ServerPlayer player))
+        {
+            return;
+        }
 
-        //    return debug;
-        //}
+        bool applied =
+            NetworkedLocomotiveRemotePairing.TryApplyRequest(
+                packet,
+                player,
+                out NetworkedItem remoteItem);
+        if (!applied)
+        {
+            LogWarning(
+                $"Rejected locomotive remote pair request from " +
+                $"{player.Username} for remote " +
+                $"{packet?.RemoteItemNetId ?? 0} and locomotive " +
+                $"{packet?.LocomotiveNetId ?? 0}.");
+        }
 
-        //);
+        // Correct speculative local state on both accepted and rejected
+        // requests. Only an owned remote is disclosed back to the requester.
+        if (remoteItem == null)
+            return;
 
-        //NetworkedItemManager.Instance.ReceiveSnapshots(packet.Items, player);
+        ItemUpdateData authoritativeState =
+            remoteItem.CreateUpdateData(
+                ItemUpdateData.ItemUpdateType.FullSync);
+        if (authoritativeState != null)
+        {
+            SendItemsChangePacket(
+                new List<ItemUpdateData>
+                {
+                    authoritativeState,
+                },
+                player);
+        }
     }
 
     private void OnCommonCashRegisterWithModulesActionPacket(CommonCashRegisterWithModulesActionPacket packet, ITransportPeer peer)
