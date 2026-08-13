@@ -1,5 +1,8 @@
+using DV.CabControls;
 using DV.Customization;
 using DV.Customization.Gadgets;
+using DV.Customization.Gadgets.Implementations;
+using DV.Items.Snapping;
 using HarmonyLib;
 using Multiplayer.Components.Networking;
 using Multiplayer.Components.Networking.Customization;
@@ -7,6 +10,7 @@ using Multiplayer.Components.Networking.Customization.Gadgets;
 using Multiplayer.Components.Networking.World;
 using Multiplayer.Networking.Data.Customization;
 using System;
+using UnityEngine;
 
 namespace Multiplayer.Patches.Customization;
 
@@ -18,7 +22,6 @@ internal static class GadgetItemRegistrationPatch
     {
         if (__instance?.Item == null || __instance.Gadget == null)
             return;
-
         NetworkedItem networkedItem = __instance.GetComponent<NetworkedItem>() ?? __instance.gameObject.AddComponent<NetworkedItem>();
         networkedItem.Initialize(__instance);
         GadgetTrackedValueRegistry.Register(networkedItem, __instance, __instance.Gadget);
@@ -29,18 +32,15 @@ internal static class GadgetItemRegistrationPatch
 [HarmonyPatch]
 internal static class GadgetStructuralObservationPatch
 {
-    [HarmonyPostfix]
-    [HarmonyPatch(typeof(GadgetItem), nameof(GadgetItem.Place))]
+    [HarmonyPostfix, HarmonyPatch(typeof(GadgetItem), nameof(GadgetItem.Place))]
     private static void AfterPlace(Customization destination, GadgetItem gadgetItem, GadgetBase __result)
     {
         if (CustomizationSyncScope.IsApplyingRemote || __result == null || gadgetItem?.Item == null ||
             !NetworkedItem.TryGetNetworkedItem(gadgetItem.Item, out NetworkedItem networkedItem) || networkedItem.NetId == 0 ||
             !CustomizationRef.TryFrom(destination, out CustomizationRef target))
             return;
-
         if (NetworkLifecycle.Instance.IsHost())
             GadgetStructuralSync.ClearServerOwnership(networkedItem.NetId);
-
         GadgetStructuralSync.SendObserved(new GadgetPlacePacket
         {
             GadgetItemNetId = networkedItem.NetId,
@@ -51,22 +51,19 @@ internal static class GadgetStructuralObservationPatch
         });
     }
 
-    [HarmonyPrefix]
-    [HarmonyPatch(typeof(GadgetBase), nameof(GadgetBase.Remove))]
+    [HarmonyPrefix, HarmonyPatch(typeof(GadgetBase), nameof(GadgetBase.Remove))]
     private static void BeforeRemove(ref IDisposable __state)
     {
         if (!CustomizationSyncScope.IsApplyingRemote)
             __state = CustomizationSyncScope.LocalRoot();
     }
 
-    [HarmonyPostfix]
-    [HarmonyPatch(typeof(GadgetBase), nameof(GadgetBase.Remove))]
+    [HarmonyPostfix, HarmonyPatch(typeof(GadgetBase), nameof(GadgetBase.Remove))]
     private static void AfterRemove(bool reparentToTrainCar, GadgetItem __result)
     {
         if (CustomizationSyncScope.IsApplyingRemote || __result?.Item == null ||
             !NetworkedItem.TryGetNetworkedItem(__result.Item, out NetworkedItem networkedItem) || networkedItem.NetId == 0)
             return;
-
         GadgetStructuralSync.SendObserved(new GadgetRemovePacket
         {
             GadgetItemNetId = networkedItem.NetId,
@@ -74,11 +71,56 @@ internal static class GadgetStructuralObservationPatch
         });
     }
 
-    [HarmonyFinalizer]
-    [HarmonyPatch(typeof(GadgetBase), nameof(GadgetBase.Remove))]
+    [HarmonyFinalizer, HarmonyPatch(typeof(GadgetBase), nameof(GadgetBase.Remove))]
     private static Exception FinishRemove(Exception __exception, IDisposable __state)
     {
         __state?.Dispose();
         return __exception;
+    }
+}
+
+[HarmonyPatch]
+internal static class GadgetSnapObservationPatch
+{
+    [HarmonyPostfix, HarmonyPatch(typeof(ItemSnapPointBase), nameof(ItemSnapPointBase.SnapItem), new[] { typeof(ItemBase), typeof(bool) })]
+    private static void AfterSnap(ItemSnapPointBase __instance, ItemBase itemToSnap, bool __result)
+    {
+        if (!__result || __instance is not SnapPointGadget point || itemToSnap == null ||
+            CustomizationSyncScope.IsApplyingRemote || CustomizationSyncScope.IsApplyingRootAction ||
+            !GadgetSnapSync.TryDescribe(point, out ushort ownerId, out int pointIndex) ||
+            !NetworkedItem.TryGetNetworkedItem(itemToSnap, out NetworkedItem attached) || attached.NetId == 0)
+            return;
+        Transform anchor = itemToSnap.SnappableItem?.GetAnchor(point.SnapPointType);
+        SnapPointAnchorSliding sliding = anchor?.GetComponent<SnapPointAnchorSliding>();
+        GadgetStructuralSync.SendObserved(new GadgetSnapPacket { State = new GadgetSnapState
+        {
+            TargetGadgetItemNetId = ownerId,
+            AttachedItemNetId = attached.NetId,
+            SnapPointIndex = pointIndex,
+            HasSlidingAnchor = sliding != null,
+            SlidingAnchorLocalPosition = sliding != null ? sliding.transform.localPosition : default,
+        }});
+    }
+
+    [HarmonyPrefix, HarmonyPatch(typeof(ItemSnapPointBase), nameof(ItemSnapPointBase.UnsnapItem), new[] { typeof(bool) })]
+    private static void BeforeUnsnap(ItemSnapPointBase __instance, ref ItemBase __state)
+    {
+        __state = __instance is SnapPointGadget ? __instance.SnappedItem : null;
+    }
+
+    [HarmonyPostfix, HarmonyPatch(typeof(ItemSnapPointBase), nameof(ItemSnapPointBase.UnsnapItem), new[] { typeof(bool) })]
+    private static void AfterUnsnap(ItemSnapPointBase __instance, bool __result, ItemBase __state)
+    {
+        if (!__result || __instance is not SnapPointGadget point || __state == null ||
+            CustomizationSyncScope.IsApplyingRemote || CustomizationSyncScope.IsApplyingRootAction ||
+            !GadgetSnapSync.TryDescribe(point, out ushort ownerId, out int pointIndex) ||
+            !NetworkedItem.TryGetNetworkedItem(__state, out NetworkedItem attached) || attached.NetId == 0)
+            return;
+        GadgetStructuralSync.SendObserved(new GadgetUnsnapPacket
+        {
+            TargetGadgetItemNetId = ownerId,
+            AttachedItemNetId = attached.NetId,
+            SnapPointIndex = pointIndex,
+        });
     }
 }
