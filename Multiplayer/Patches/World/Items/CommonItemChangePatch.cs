@@ -1,4 +1,5 @@
 using DV.Customization.Gadgets;
+using DV.Customization.Gadgets.Implementations;
 using HarmonyLib;
 using Multiplayer.Components.Networking;
 using Multiplayer.Components.Networking.World;
@@ -75,8 +76,17 @@ internal static class InstalledGadgetRelevancePatch
 
             foreach (NetworkedItem item in NetworkedItem.GetAll())
             {
-                if (item?.Item?.GetComponent<GadgetItem>()?.Gadget?.IsLinked == true)
-                    player.NearbyItems[item] = now;
+                GadgetBase gadget = item?.Item?.GetComponent<GadgetItem>()?.Gadget;
+                if (gadget?.IsLinked != true)
+                    continue;
+
+                player.NearbyItems[item] = now;
+
+                foreach (SnapPointGadget point in gadget.GetComponentsInChildren<SnapPointGadget>(true))
+                {
+                    if (point?.SnappedItem != null && NetworkedItem.TryGetNetworkedItem(point.SnappedItem, out NetworkedItem attached))
+                        player.NearbyItems[attached] = now;
+                }
             }
         }
     }
