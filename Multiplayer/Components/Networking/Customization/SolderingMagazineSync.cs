@@ -66,8 +66,7 @@ internal static class SolderingMagazineSync
 
     public static void ObserveLoadedSpool(GadgetSolderingTool tool, GameObject spool)
     {
-        if (CustomizationSyncScope.IsApplyingRemote || tool == null || spool == null ||
-            !TryGetToolNetId(tool, out ushort toolNetId))
+        if (CustomizationSyncScope.IsApplyingRemote || tool == null || spool == null || !TryGetToolNetId(tool, out ushort toolNetId))
             return;
 
         ItemBase spoolItem = spool.GetComponent<ItemBase>();
@@ -81,7 +80,7 @@ internal static class SolderingMagazineSync
 
         SolderingMagazinePacket packet = new() { ToolItemNetId = toolNetId, SpoolItemNetId = spoolNetId };
         if (NetworkLifecycle.Instance.IsHost())
-            BroadcastCanonical(server: NetworkLifecycle.Instance.Server, packet, null);
+            BroadcastCanonical(NetworkLifecycle.Instance.Server, packet, null);
         else
             NetworkLifecycle.Instance.Client.SendExternalSerializablePacketToServer(packet, true);
     }
@@ -105,6 +104,18 @@ internal static class SolderingMagazineSync
         foreach (GadgetSolderingTool tool in Resources.FindObjectsOfTypeAll<GadgetSolderingTool>())
         {
             if (tool == null || !tool.gameObject.scene.IsValid() || !TryGetToolNetId(tool, out ushort toolNetId))
+                continue;
+
+            bool owned = false;
+            foreach (ServerPlayer other in server.ServerPlayers)
+            {
+                if (other.OwnsItem(toolNetId))
+                {
+                    owned = true;
+                    break;
+                }
+            }
+            if (owned || (player.WorldPosition - tool.transform.position).sqrMagnitude > NetworkedItemManager.MAX_DISTANCE_TO_ITEM_SQR)
                 continue;
 
             ItemMagazine magazine = GetMagazine(tool);
@@ -140,8 +151,7 @@ internal static class SolderingMagazineSync
         }
         else
         {
-            if (!NetworkedItem.TryGet(packet.SpoolItemNetId, out canonicalSpool) || canonicalSpool?.Item == null ||
-                !TryApplyCanonicalSpool(tool, packet.SpoolItemNetId))
+            if (!NetworkedItem.TryGet(packet.SpoolItemNetId, out canonicalSpool) || canonicalSpool?.Item == null || !TryApplyCanonicalSpool(tool, packet.SpoolItemNetId))
                 return;
         }
 
@@ -239,26 +249,28 @@ internal static class SolderingMagazineSync
         if (server == null || packet == null || !NetworkedItem.TryGet(packet.ToolItemNetId, out NetworkedItem toolItem))
             return;
         spool ??= NetworkedItem.TryGet(packet.SpoolItemNetId, out NetworkedItem resolved) ? resolved : null;
-        ITransportPeer excluded = (sender as ServerPlayerWrapper)?.Peer;
-        uint tick = NetworkLifecycle.Instance.Tick;
+        ITransportPeer senderPeer = (sender as ServerPlayerWrapper)?.Peer;
         foreach (ServerPlayer recipient in server.ServerPlayers)
         {
             if (recipient.Peer == server.SelfPeer || recipient.LoadingState < PlayerLoadingState.ReadyForItems)
                 continue;
-            EnsureKnown(server, recipient, toolItem, toolItem.transform.position, toolItem.transform.rotation);
+            if (!recipient.KnownItems.ContainsKey(toolItem) && recipient.Peer != senderPeer)
+                continue;
             if (spool != null)
                 EnsureKnown(server, recipient, spool, spool.transform.position, spool.transform.rotation);
-            if (recipient.Peer != excluded || packet.SpoolItemNetId != 0)
-                server.SendExternalSerializablePacketToPlayer(packet, recipient.Peer, true);
+            server.SendExternalSerializablePacketToPlayer(packet, recipient.Peer, true);
         }
     }
 
     private static void BroadcastDrop(NetworkServer server, SolderingDropEmptySpoolPacket packet, IPlayer sender)
     {
-        ITransportPeer excluded = (sender as ServerPlayerWrapper)?.Peer;
+        if (server == null || packet == null || !NetworkedItem.TryGet(packet.ToolItemNetId, out NetworkedItem toolItem))
+            return;
+        ITransportPeer senderPeer = (sender as ServerPlayerWrapper)?.Peer;
         foreach (ServerPlayer recipient in server.ServerPlayers)
         {
-            if (recipient.Peer == server.SelfPeer || recipient.Peer == excluded || recipient.LoadingState < PlayerLoadingState.ReadyForItems)
+            if (recipient.Peer == server.SelfPeer || recipient.Peer == senderPeer || recipient.LoadingState < PlayerLoadingState.ReadyForItems ||
+                !recipient.KnownItems.ContainsKey(toolItem))
                 continue;
             server.SendExternalSerializablePacketToPlayer(packet, recipient.Peer, true);
         }
