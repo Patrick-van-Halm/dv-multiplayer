@@ -47,7 +47,6 @@ internal static class CustomizationClientJoinPatch
     {
         if (newState != PlayerLoadingState.ReadyForItems || allowItems || NetworkLifecycle.Instance.IsHost())
             return true;
-
         CustomizationSnapshotSync.BeginJoin();
         waiting = true;
         SendLoadStateUpdate.Invoke(__instance, new object[] { PlayerLoadingState.ReadyForCustomizers });
@@ -71,7 +70,6 @@ internal static class CustomizationClientJoinPatch
                 client.Log("Waiting for customization state");
                 while (!CustomizationSnapshotSync.CustomizerStateLoaded)
                     yield return null;
-
                 allowItems = true;
                 try
                 {
@@ -83,7 +81,6 @@ internal static class CustomizationClientJoinPatch
                     waiting = false;
                 }
             }
-
             yield return current;
         }
     }
@@ -97,10 +94,8 @@ internal static class CustomizationServerJoinPatch
     {
         if (packet.LoadState != PlayerLoadingState.ReadyForCustomizers)
             return true;
-
         if (!__instance.TryGetServerPlayer(peer, out ServerPlayer player))
             return false;
-
         if (player.LoadingState != PlayerLoadingState.ReadyForTrainSets)
         {
             __instance.LogWarning($"Ignoring ReadyForCustomizers from {player.Username} while at {player.LoadingState}");
@@ -116,7 +111,7 @@ internal static class CustomizationServerJoinPatch
         }
 
         __instance.Log($"Sending customization state to {player.Username}: {snapshot.Gadgets.Count} gadgets, {snapshot.Mounts.Count} mounts, {snapshot.Wires.Count} wires, {snapshot.Holes.Count} free holes");
-        __instance.SendExternalSerializablePacketToPlayer(snapshot, peer, true);
+        CustomizationPacketSend.SendJoinState(__instance, peer, snapshot);
         player.LoadingState = PlayerLoadingState.ReadyForCustomizers;
         return false;
     }
