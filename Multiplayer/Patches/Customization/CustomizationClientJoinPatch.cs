@@ -1,6 +1,7 @@
 using HarmonyLib;
 using Multiplayer.Components.Networking;
 using Multiplayer.Components.Networking.Customization;
+using Multiplayer.Components.Networking.World;
 using Multiplayer.Networking.Data;
 using Multiplayer.Networking.Data.Customization;
 using Multiplayer.Networking.Managers.Client;
@@ -107,6 +108,13 @@ internal static class CustomizationServerJoinPatch
         }
 
         var snapshot = CustomizationSnapshotSync.Build();
+        uint tick = NetworkLifecycle.Instance.Tick;
+        foreach (GadgetPlacementState placement in snapshot.Gadgets)
+        {
+            if (placement?.Item != null && NetworkedItem.TryGet(placement.Item.ItemNetId, out NetworkedItem item))
+                player.KnownItems[item] = tick;
+        }
+
         __instance.Log($"Sending customization state to {player.Username}: {snapshot.Gadgets.Count} gadgets, {snapshot.Mounts.Count} mounts, {snapshot.Wires.Count} wires, {snapshot.Holes.Count} free holes");
         __instance.SendExternalSerializablePacketToPlayer(snapshot, peer, true);
         player.LoadingState = PlayerLoadingState.ReadyForCustomizers;
