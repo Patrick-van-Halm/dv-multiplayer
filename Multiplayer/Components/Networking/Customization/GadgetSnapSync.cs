@@ -105,14 +105,15 @@ internal static class GadgetSnapSync
 
         using (CustomizationSyncScope.Remote())
         {
-            if (point.SnappedItem == attached.Item)
-                return true;
-            if (point.SnappedItem != null)
-                point.UnsnapItem(true);
-            if (attached.Item.SnappableItem?.SnappedTo != null)
-                attached.Item.SnappableItem.SnappedTo.UnsnapItem(true);
-            if (!point.SnapItem(attached.Item, true))
-                return false;
+            if (point.SnappedItem != attached.Item)
+            {
+                if (point.SnappedItem != null)
+                    point.UnsnapItem(true);
+                if (attached.Item.SnappableItem?.SnappedTo != null)
+                    attached.Item.SnappableItem.SnappedTo.UnsnapItem(true);
+                if (!point.SnapItem(attached.Item, true))
+                    return false;
+            }
 
             if (state.HasSlidingAnchor)
             {
