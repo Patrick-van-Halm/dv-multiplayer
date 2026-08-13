@@ -66,6 +66,7 @@ internal static class CustomizationSnapshotSync
 
         GadgetMountSync.AppendSnapshot(packet);
         GadgetWireSync.AppendSnapshot(packet);
+        GadgetSnapSync.AppendSnapshot(packet);
 
         foreach (Customization customization in RuntimeCustomizations())
         {
@@ -111,7 +112,8 @@ internal static class CustomizationSnapshotSync
                 NetworkedItemManager.Instance.ReceiveSnapshots(new List<ItemUpdateData> { create }, null);
             }
 
-            while (packet.Gadgets.Any(p => p?.Item != null && p.Item.ItemNetId != 0 && !TryGetGadget(p.Item.ItemNetId, out _, out _)))
+            while (packet.Gadgets.Any(p => p?.Item != null && p.Item.ItemNetId != 0 && !TryGetGadget(p.Item.ItemNetId, out _, out _)) ||
+                   !GadgetSnapSync.DependenciesReady(packet))
                 yield return null;
 
             using (CustomizationSyncScope.Remote(rootAction: true))
@@ -139,6 +141,7 @@ internal static class CustomizationSnapshotSync
 
                 GadgetMountSync.ApplySnapshot(packet);
                 GadgetWireSync.ApplySnapshot(packet);
+                GadgetSnapSync.ApplySnapshot(packet);
 
                 foreach (Customization customization in RuntimeCustomizations())
                     customization.ClearHoles();
