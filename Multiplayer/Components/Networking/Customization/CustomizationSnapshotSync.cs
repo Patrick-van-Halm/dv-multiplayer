@@ -71,6 +71,8 @@ internal static class CustomizationSnapshotSync
             });
         }
 
+        GadgetMountSync.AppendSnapshot(packet);
+
         foreach (Customization customization in RuntimeCustomizations())
         {
             if (!CustomizationRef.TryFrom(customization, out CustomizationRef target))
@@ -150,6 +152,8 @@ internal static class CustomizationSnapshotSync
 
                     SetGlassState(gadget, placement.IsOnGlass);
                 }
+
+                GadgetMountSync.ApplySnapshot(packet);
 
                 foreach (Customization customization in RuntimeCustomizations())
                     customization.ClearHoles();
