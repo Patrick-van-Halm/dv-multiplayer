@@ -9,6 +9,7 @@ using Multiplayer.Networking.Managers.Client;
 using Multiplayer.Networking.Managers.Server;
 using Multiplayer.Networking.TransportLayers;
 using System;
+using System.Collections;
 using System.Linq;
 using UnityEngine;
 
@@ -16,9 +17,17 @@ namespace Multiplayer.Components.Networking.Customization;
 
 internal static class GadgetSnapSync
 {
+    private const int DependencyWaitFrames = 120;
+
     public static void RegisterClient(NetworkClient client)
     {
-        client.RegisterExternalSerializablePacket<GadgetSnapPacket>(p => { if (p?.State != null) ApplyState(p.State); });
+        client.RegisterExternalSerializablePacket<GadgetSnapPacket>(packet =>
+        {
+            if (packet?.State == null)
+                return;
+            if (!ApplyState(packet.State))
+                NetworkLifecycle.Instance.StartCoroutine(ApplyWhenReady(packet.State));
+        });
         client.RegisterExternalSerializablePacket<GadgetUnsnapPacket>(ApplyUnsnap);
     }
 
@@ -95,6 +104,18 @@ internal static class GadgetSnapSync
             return false;
         ownerItemNetId = item.NetId;
         return true;
+    }
+
+    private static IEnumerator ApplyWhenReady(GadgetSnapState state)
+    {
+        for (int frame = 0; frame < DependencyWaitFrames; frame++)
+        {
+            if (ApplyState(state))
+                yield break;
+            yield return null;
+        }
+
+        Multiplayer.LogWarning($"Gadget snap dependencies did not resolve for gadget {state.TargetGadgetItemNetId}, item {state.AttachedItemNetId}");
     }
 
     private static bool ApplyState(GadgetSnapState state)
