@@ -3,8 +3,8 @@ using DV.Customization.Gadgets.Implementations;
 using HarmonyLib;
 using Multiplayer.Components.Networking;
 using Multiplayer.Components.Networking.World;
+using Multiplayer.Networking.Data;
 using Multiplayer.Networking.Data.Items;
-using Multiplayer.Networking.Data.Player;
 using Multiplayer.Networking.Managers.Server;
 using Multiplayer.Networking.Packets.Common;
 using Multiplayer.Networking.TransportLayers;
@@ -23,26 +23,53 @@ internal static class CommonItemChangePatch
             return;
 
         NetworkedItemManager.Instance.ReceiveSnapshots(packet.Items, player);
+    }
+}
 
-        List<ItemUpdateData> relay = null;
-        foreach (var snapshot in packet.Items)
-        {
-            if (snapshot == null || snapshot.UpdateType == ItemUpdateData.ItemUpdateType.Create)
-                continue;
-            if (!NetworkedItem.TryGet(snapshot.ItemNetId, out _))
-                continue;
-            relay ??= new List<ItemUpdateData>();
-            relay.Add(snapshot);
-        }
+[HarmonyPatch(typeof(NetworkedItemManager), "ProcessReceivedAsHost")]
+internal static class AcceptedClientItemRelayContext
+{
+    internal static ServerPlayer Sender;
+    internal static ItemUpdateData Snapshot;
 
-        if (relay == null)
+    [HarmonyPrefix]
+    private static void Prefix(ItemUpdateData snapshot, ServerPlayer sender)
+    {
+        Sender = sender;
+        Snapshot = snapshot;
+    }
+
+    [HarmonyFinalizer]
+    private static System.Exception Finalizer(System.Exception __exception)
+    {
+        Sender = null;
+        Snapshot = null;
+        return __exception;
+    }
+}
+
+[HarmonyPatch(typeof(NetworkedItem), nameof(NetworkedItem.ReceiveSnapshot))]
+internal static class AcceptedClientItemRelayPatch
+{
+    [HarmonyPostfix]
+    private static void Postfix(NetworkedItem __instance, ItemUpdateData snapshot)
+    {
+        ServerPlayer sender = AcceptedClientItemRelayContext.Sender;
+        NetworkServer server = NetworkLifecycle.Instance?.Server;
+        if (server == null || sender == null || !ReferenceEquals(snapshot, AcceptedClientItemRelayContext.Snapshot) ||
+            snapshot == null || snapshot.UpdateType == ItemUpdateData.ItemUpdateType.Create)
             return;
 
-        foreach (var otherPlayer in __instance.ServerPlayers)
+        List<ItemUpdateData> relay = new() { snapshot };
+        uint tick = NetworkLifecycle.Instance.Tick;
+        foreach (ServerPlayer recipient in server.ServerPlayers)
         {
-            if (otherPlayer == player || otherPlayer.LoadingState < PlayerLoadingState.ReadyForItems)
+            if (recipient == sender || recipient.LoadingState < PlayerLoadingState.ReadyForItems ||
+                !recipient.KnownItems.ContainsKey(__instance))
                 continue;
-            __instance.SendItemsChangePacket(relay, otherPlayer);
+
+            server.SendItemsChangePacket(relay, recipient);
+            recipient.KnownItems[__instance] = tick;
         }
     }
 }
@@ -55,6 +82,7 @@ internal static class MissingClientDestroyPatch
     {
         if (snapshot?.UpdateType != ItemUpdateData.ItemUpdateType.Destroy)
             return true;
+
         return NetworkedItem.TryGet(snapshot.ItemNetId, out _);
     }
 }
@@ -69,7 +97,7 @@ internal static class InstalledGadgetRelevancePatch
             return;
 
         float now = Time.time;
-        foreach (var player in NetworkLifecycle.Instance.Server.ServerPlayers)
+        foreach (ServerPlayer player in NetworkLifecycle.Instance.Server.ServerPlayers)
         {
             if (player.LoadingState < PlayerLoadingState.ReadyForItems)
                 continue;
@@ -81,7 +109,6 @@ internal static class InstalledGadgetRelevancePatch
                     continue;
 
                 player.NearbyItems[item] = now;
-
                 foreach (SnapPointGadget point in gadget.GetComponentsInChildren<SnapPointGadget>(true))
                 {
                     if (point?.SnappedItem != null && NetworkedItem.TryGetNetworkedItem(point.SnappedItem, out NetworkedItem attached))
