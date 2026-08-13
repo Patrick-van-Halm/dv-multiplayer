@@ -33,34 +33,27 @@ internal static class CustomizationSnapshotSync
             customizerStateLoaded = true;
             return;
         }
-
         NetworkLifecycle.Instance.StartCoroutine(Apply(packet));
     }
 
     public static ClientboundCustomizationStatePacket Build()
     {
         ClientboundCustomizationStatePacket packet = new();
-
         foreach (NetworkedItem networkedItem in NetworkedItem.GetAll().ToArray())
         {
             if (networkedItem == null || networkedItem.NetId == 0 || networkedItem.Item == null)
                 continue;
-
             GadgetItem gadgetItem = networkedItem.Item.GetComponent<GadgetItem>();
             GadgetBase gadget = gadgetItem?.Gadget;
-            if (gadget == null || !gadget.IsLinked || gadget.Custom == null ||
-                !CustomizationRef.TryFrom(gadget.Custom, out CustomizationRef target))
+            if (gadget == null || !gadget.IsLinked || gadget.Custom == null || !CustomizationRef.TryFrom(gadget.Custom, out CustomizationRef target))
                 continue;
-
             ItemUpdateData itemState = networkedItem.CreateUpdateData(ItemUpdateData.ItemUpdateType.FullSync);
             if (itemState == null)
                 continue;
-
             itemState.UpdateType = ItemUpdateData.ItemUpdateType.Create;
             itemState.ItemState = ItemState.Dropped;
             itemState.ItemPosition = gadget.transform.position - WorldMover.currentMove;
             itemState.ItemRotation = gadget.transform.rotation;
-
             packet.Gadgets.Add(new GadgetPlacementState
             {
                 Item = itemState,
@@ -72,17 +65,16 @@ internal static class CustomizationSnapshotSync
         }
 
         GadgetMountSync.AppendSnapshot(packet);
+        GadgetWireSync.AppendSnapshot(packet);
 
         foreach (Customization customization in RuntimeCustomizations())
         {
             if (!CustomizationRef.TryFrom(customization, out CustomizationRef target))
                 continue;
-
             foreach (Collider hole in customization.Holes)
             {
                 if (hole == null)
                     continue;
-
                 packet.Holes.Add(new CustomizationHoleState
                 {
                     Target = target,
@@ -91,7 +83,6 @@ internal static class CustomizationSnapshotSync
                 });
             }
         }
-
         return packet;
     }
 
@@ -105,19 +96,15 @@ internal static class CustomizationSnapshotSync
     {
         if (snapshotApplying)
             yield break;
-
         snapshotApplying = true;
         customizerStateLoaded = false;
-
         try
         {
             packet ??= new ClientboundCustomizationStatePacket();
-
             foreach (GadgetPlacementState placement in packet.Gadgets)
             {
                 if (placement?.Item == null || placement.Item.ItemNetId == 0)
                     continue;
-
                 ItemUpdateData create = CloneWithoutStates(placement.Item);
                 create.UpdateType = ItemUpdateData.ItemUpdateType.Create;
                 create.ItemState = ItemState.Dropped;
@@ -131,10 +118,8 @@ internal static class CustomizationSnapshotSync
             {
                 foreach (GadgetPlacementState placement in packet.Gadgets)
                 {
-                    if (placement?.Item == null || !placement.Target.TryResolve(out Customization target) ||
-                        !TryGetGadget(placement.Item.ItemNetId, out GadgetItem gadgetItem, out GadgetBase gadget))
+                    if (placement?.Item == null || !placement.Target.TryResolve(out Customization target) || !TryGetGadget(placement.Item.ItemNetId, out GadgetItem gadgetItem, out GadgetBase gadget))
                         continue;
-
                     if (!gadget.IsLinked)
                         GadgetItem.Place(target, placement.LocalPosition, placement.LocalRotation, gadgetItem, null);
                     else if (gadget.Custom == target)
@@ -149,15 +134,14 @@ internal static class CustomizationSnapshotSync
                         gadget.Remove(false);
                         GadgetItem.Place(target, placement.LocalPosition, placement.LocalRotation, gadgetItem, null);
                     }
-
                     SetGlassState(gadget, placement.IsOnGlass);
                 }
 
                 GadgetMountSync.ApplySnapshot(packet);
+                GadgetWireSync.ApplySnapshot(packet);
 
                 foreach (Customization customization in RuntimeCustomizations())
                     customization.ClearHoles();
-
                 foreach (CustomizationHoleState hole in packet.Holes)
                 {
                     if (hole != null && hole.Target.TryResolve(out Customization target))
@@ -167,10 +151,8 @@ internal static class CustomizationSnapshotSync
 
             foreach (GadgetPlacementState placement in packet.Gadgets)
             {
-                if (placement?.Item?.States == null || placement.Item.States.Count == 0 ||
-                    !NetworkedItem.TryGet(placement.Item.ItemNetId, out NetworkedItem networkedItem))
+                if (placement?.Item?.States == null || placement.Item.States.Count == 0 || !NetworkedItem.TryGet(placement.Item.ItemNetId, out NetworkedItem networkedItem))
                     continue;
-
                 networkedItem.ReceiveSnapshot(new ItemUpdateData
                 {
                     UpdateType = ItemUpdateData.ItemUpdateType.ObjectState,
@@ -178,7 +160,6 @@ internal static class CustomizationSnapshotSync
                     States = new Dictionary<string, object>(placement.Item.States),
                 });
             }
-
             customizerStateLoaded = true;
         }
         finally
@@ -193,7 +174,6 @@ internal static class CustomizationSnapshotSync
         gadget = null;
         if (!NetworkedItem.TryGet(itemNetId, out NetworkedItem item) || item?.Item == null)
             return false;
-
         gadgetItem = item.Item.GetComponent<GadgetItem>();
         gadget = gadgetItem?.Gadget;
         return gadgetItem != null && gadget != null;
@@ -201,8 +181,7 @@ internal static class CustomizationSnapshotSync
 
     private static IEnumerable<Customization> RuntimeCustomizations()
     {
-        return Resources.FindObjectsOfTypeAll<Customization>()
-            .Where(c => c != null && c.gameObject.scene.IsValid());
+        return Resources.FindObjectsOfTypeAll<Customization>().Where(c => c != null && c.gameObject.scene.IsValid());
     }
 
     private static ItemUpdateData CloneWithoutStates(ItemUpdateData source)
