@@ -16,17 +16,25 @@ public static class CustomizationSyncScope
         if (rootAction)
             rootActionDepth++;
 
-        return new Scope(rootAction);
+        return new Scope(rootAction, true);
+    }
+
+    public static IDisposable LocalRoot()
+    {
+        rootActionDepth++;
+        return new Scope(true, false);
     }
 
     private sealed class Scope : IDisposable
     {
         private readonly bool rootAction;
+        private readonly bool remote;
         private bool disposed;
 
-        public Scope(bool rootAction)
+        public Scope(bool rootAction, bool remote)
         {
             this.rootAction = rootAction;
+            this.remote = remote;
         }
 
         public void Dispose()
@@ -37,7 +45,8 @@ public static class CustomizationSyncScope
             disposed = true;
             if (rootAction)
                 rootActionDepth--;
-            remoteDepth--;
+            if (remote)
+                remoteDepth--;
         }
     }
 }
