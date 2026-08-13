@@ -6,6 +6,7 @@ using Multiplayer.Components.Networking.Customization;
 using Multiplayer.Components.Networking.Customization.Gadgets;
 using Multiplayer.Components.Networking.World;
 using Multiplayer.Networking.Data.Customization;
+using System;
 
 namespace Multiplayer.Patches.Customization;
 
@@ -50,6 +51,14 @@ internal static class GadgetStructuralObservationPatch
         });
     }
 
+    [HarmonyPrefix]
+    [HarmonyPatch(typeof(GadgetBase), nameof(GadgetBase.Remove))]
+    private static void BeforeRemove(ref IDisposable __state)
+    {
+        if (!CustomizationSyncScope.IsApplyingRemote)
+            __state = CustomizationSyncScope.LocalRoot();
+    }
+
     [HarmonyPostfix]
     [HarmonyPatch(typeof(GadgetBase), nameof(GadgetBase.Remove))]
     private static void AfterRemove(bool reparentToTrainCar, GadgetItem __result)
@@ -63,5 +72,13 @@ internal static class GadgetStructuralObservationPatch
             GadgetItemNetId = networkedItem.NetId,
             ReparentToTrainCar = reparentToTrainCar,
         });
+    }
+
+    [HarmonyFinalizer]
+    [HarmonyPatch(typeof(GadgetBase), nameof(GadgetBase.Remove))]
+    private static Exception FinishRemove(Exception __exception, IDisposable __state)
+    {
+        __state?.Dispose();
+        return __exception;
     }
 }
