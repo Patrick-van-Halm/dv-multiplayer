@@ -11,6 +11,8 @@ namespace Multiplayer.Components.Networking.Customization.Gadgets;
 
 public static class GadgetTrackedValueRegistry
 {
+    private static readonly MethodInfo SetMountPointGlass = AccessTools.PropertySetter(typeof(MountPoint), nameof(MountPoint.IsOnGlass));
+
     public static void Register(NetworkedItem item, GadgetItem gadgetItem, GadgetBase gadget)
     {
         if (item == null || gadgetItem == null || gadget == null)
@@ -24,9 +26,7 @@ public static class GadgetTrackedValueRegistry
 
     private static void RegisterSoldering(NetworkedItem item, GadgetBase gadget)
     {
-        item.RegisterTrackedValue(
-            "solder.units",
-            () => gadget.SolderingProgressUnits,
+        item.RegisterTrackedValue("solder.units", () => gadget.SolderingProgressUnits,
             value => gadget.SetSolderingUnits(Mathf.Max(0, value)));
     }
 
@@ -40,15 +40,10 @@ public static class GadgetTrackedValueRegistry
             {
                 int ci = componentIndex;
                 int pi = pointIndex;
-                item.RegisterTrackedValue(
-                    $"drill.{ci}.{pi}.state",
-                    () => (int)drillable.GetMountPointState(pi),
+                item.RegisterTrackedValue($"drill.{ci}.{pi}.state", () => (int)drillable.GetMountPointState(pi),
                     value => drillable.SetMountPointState(pi, (MountPoint.States)value));
-
-                item.RegisterTrackedValue(
-                    $"drill.{ci}.{pi}.glass",
-                    () => drillable.GetMountPoint(pi).IsOnGlass,
-                    value => drillable.GetMountPoint(pi).IsOnGlass = value);
+                item.RegisterTrackedValue($"drill.{ci}.{pi}.glass", () => drillable.GetMountPoint(pi).IsOnGlass,
+                    value => SetMountPointGlass?.Invoke(drillable.GetMountPoint(pi), new object[] { value }));
             }
         }
     }
@@ -65,8 +60,7 @@ public static class GadgetTrackedValueRegistry
         {
             int ci = componentIndex;
             TextGadget text = textGadgets[componentIndex];
-            item.RegisterTrackedValue(
-                $"text.{ci}.value",
+            item.RegisterTrackedValue($"text.{ci}.value",
                 () => ((TextMeshPro)textMeshField.GetValue(text))?.text ?? string.Empty,
                 value =>
                 {
@@ -86,17 +80,14 @@ public static class GadgetTrackedValueRegistry
                 item.RegisterTrackedValue("gadget.alternating.interval", () => alternating.SelectedInterval,
                     value => alternating.SelectedInterval = Mathf.Clamp(value, 0, Math.Max(0, alternating.IntervalCount - 1)));
                 break;
-
             case GadgetATS ats:
                 item.RegisterTrackedValue("gadget.ats.regime", () => ats.Regime,
                     value => ats.SetRegime(Mathf.Clamp(value, 0, Math.Max(0, ats.RegimesCount - 1))));
                 break;
-
             case GadgetAmpLimiter limiter:
                 item.RegisterTrackedValue("gadget.amp.mode", () => limiter.ModeIndex,
                     value => limiter.ModeIndex = Mathf.Clamp(value, 0, Math.Max(0, limiter.ModeCount - 1)));
                 break;
-
             case GadgetDPU dpu:
                 item.RegisterTrackedValue("gadget.dpu.regime", () => (int)dpu.Regime,
                     value => dpu.Regime = (GadgetDPU.WirelessMode)value);
@@ -105,24 +96,20 @@ public static class GadgetTrackedValueRegistry
                 item.RegisterTrackedValue("gadget.dpu.channel", () => dpu.Channel,
                     value => dpu.Channel = Mathf.Clamp(value, 0, 7));
                 break;
-
             case GadgetOverheatProtection overheat:
                 item.RegisterTrackedValue("gadget.overheat.mode", () => overheat.ModeIndex,
                     value => overheat.ModeIndex = Mathf.Clamp(value, 0, Math.Max(0, overheat.ModeCount - 1)));
                 RegisterPrivateBool(item, "gadget.overheat.cut-engine", overheat, "cutEngine");
                 break;
-
             case GadgetControlPanel controlPanel:
                 RegisterPrivateFloat(item, "gadget.control-panel.tilt", controlPanel, "tilt");
                 break;
-
             case GadgetProximityScreen screen:
                 item.RegisterTrackedValue("gadget.proximity.channel", () => screen.CurrentChannel,
                     value => screen.CurrentChannel = Mathf.Clamp(value, 0, GadgetProximityScreen.CHANNEL_COUNT - 1));
                 item.RegisterTrackedValue("gadget.proximity.mode", () => screen.CurrentMode,
                     value => screen.CurrentMode = Mathf.Clamp(value, 0, 1));
                 break;
-
             case GadgetSwitchSetter switchSetter:
                 item.RegisterTrackedValue("gadget.switch-setter.mode", () => switchSetter.Mode,
                     value => switchSetter.Mode = Mathf.Clamp(value, 0, Math.Max(0, switchSetter.ModeCount - 1)));
@@ -131,7 +118,6 @@ public static class GadgetTrackedValueRegistry
                 item.RegisterTrackedValue("gadget.switch-setter.direction", () => switchSetter.DirectionMode,
                     value => switchSetter.DirectionMode = Mathf.Clamp(value, 0, 2));
                 break;
-
             case GadgetRoadrunner roadRunner:
                 RegisterRoadrunner(item, roadRunner);
                 break;
@@ -143,11 +129,9 @@ public static class GadgetTrackedValueRegistry
         FieldInfo target = AccessTools.Field(typeof(GadgetRoadrunner), "target");
         FieldInfo countup = AccessTools.Field(typeof(GadgetRoadrunner), "countup");
         if (target != null && target.FieldType == typeof(float))
-            item.RegisterTrackedValue("gadget.roadrunner.target", () => (float)target.GetValue(roadRunner),
-                value => target.SetValue(roadRunner, value));
+            item.RegisterTrackedValue("gadget.roadrunner.target", () => (float)target.GetValue(roadRunner), value => target.SetValue(roadRunner, value));
         if (countup != null && countup.FieldType == typeof(float))
-            item.RegisterTrackedValue("gadget.roadrunner.countup", () => (float)countup.GetValue(roadRunner),
-                value => countup.SetValue(roadRunner, value));
+            item.RegisterTrackedValue("gadget.roadrunner.countup", () => (float)countup.GetValue(roadRunner), value => countup.SetValue(roadRunner, value));
     }
 
     private static void RegisterPrivateBool(NetworkedItem item, string key, object target, string fieldName)
@@ -162,7 +146,6 @@ public static class GadgetTrackedValueRegistry
         FieldInfo field = AccessTools.Field(target.GetType(), fieldName);
         if (field == null)
             return;
-
         if (field.FieldType == typeof(float))
             item.RegisterTrackedValue(key, () => (float)field.GetValue(target), value => field.SetValue(target, value));
         else if (field.FieldType == typeof(double))
