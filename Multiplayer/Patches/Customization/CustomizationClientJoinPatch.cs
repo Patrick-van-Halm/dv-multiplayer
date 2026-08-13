@@ -25,6 +25,7 @@ internal static class CustomizationClientJoinPatch
     {
         __instance.RegisterExternalSerializablePacket<ClientboundCustomizationStatePacket>(CustomizationSnapshotSync.Receive);
         GadgetStructuralSync.RegisterClient(__instance);
+        GadgetMountSync.RegisterClient(__instance);
         CustomizationHoleSync.RegisterClient(__instance);
     }
 
@@ -33,6 +34,7 @@ internal static class CustomizationClientJoinPatch
     private static void SubscribeServer(NetworkServer __instance)
     {
         GadgetStructuralSync.RegisterServer(__instance);
+        GadgetMountSync.RegisterServer(__instance);
         CustomizationHoleSync.RegisterServer(__instance);
     }
 
@@ -103,7 +105,7 @@ internal static class CustomizationServerJoinPatch
         }
 
         var snapshot = CustomizationSnapshotSync.Build();
-        __instance.Log($"Sending customization state to {player.Username}: {snapshot.Gadgets.Count} gadgets, {snapshot.Holes.Count} free holes");
+        __instance.Log($"Sending customization state to {player.Username}: {snapshot.Gadgets.Count} gadgets, {snapshot.Mounts.Count} mounts, {snapshot.Holes.Count} free holes");
         __instance.SendExternalSerializablePacketToPlayer(snapshot, peer, true);
         player.LoadingState = PlayerLoadingState.ReadyForCustomizers;
         return false;
