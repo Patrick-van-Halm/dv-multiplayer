@@ -11,8 +11,6 @@ namespace Multiplayer.Components.Networking.Customization.Gadgets;
 
 public static class GadgetTrackedValueRegistry
 {
-    private static readonly MethodInfo SetMountPointGlass = AccessTools.PropertySetter(typeof(MountPoint), nameof(MountPoint.IsOnGlass));
-
     public static void Register(NetworkedItem item, GadgetItem gadgetItem, GadgetBase gadget)
     {
         if (item == null || gadgetItem == null || gadget == null)
@@ -26,7 +24,9 @@ public static class GadgetTrackedValueRegistry
 
     private static void RegisterSoldering(NetworkedItem item, GadgetBase gadget)
     {
-        item.RegisterTrackedValue("solder.units", () => gadget.SolderingProgressUnits,
+        item.RegisterTrackedValue(
+            "solder.units",
+            () => gadget.SolderingProgressUnits,
             value => gadget.SetSolderingUnits(Mathf.Max(0, value)));
     }
 
@@ -40,10 +40,21 @@ public static class GadgetTrackedValueRegistry
             {
                 int ci = componentIndex;
                 int pi = pointIndex;
-                item.RegisterTrackedValue($"drill.{ci}.{pi}.state", () => (int)drillable.GetMountPointState(pi),
+                item.RegisterTrackedValue(
+                    $"drill.{ci}.{pi}.state",
+                    () => (int)drillable.GetMountPointState(pi),
                     value => drillable.SetMountPointState(pi, (MountPoint.States)value));
-                item.RegisterTrackedValue($"drill.{ci}.{pi}.glass", () => drillable.GetMountPoint(pi).IsOnGlass,
-                    value => SetMountPointGlass?.Invoke(drillable.GetMountPoint(pi), new object[] { value }));
+
+                FieldInfo glassField = AccessTools.Property(typeof(MountPoint), nameof(MountPoint.IsOnGlass))?.GetSetMethod(true) != null
+                    ? AccessTools.Field(typeof(MountPoint), "<IsOnGlass>k__BackingField")
+                    : null;
+                if (glassField != null)
+                {
+                    item.RegisterTrackedValue(
+                        $"drill.{ci}.{pi}.glass",
+                        () => drillable.GetMountPoint(pi).IsOnGlass,
+                        value => glassField.SetValue(drillable.GetMountPoint(pi), value));
+                }
             }
         }
     }
@@ -60,7 +71,8 @@ public static class GadgetTrackedValueRegistry
         {
             int ci = componentIndex;
             TextGadget text = textGadgets[componentIndex];
-            item.RegisterTrackedValue($"text.{ci}.value",
+            item.RegisterTrackedValue(
+                $"text.{ci}.value",
                 () => ((TextMeshPro)textMeshField.GetValue(text))?.text ?? string.Empty,
                 value =>
                 {
@@ -119,19 +131,10 @@ public static class GadgetTrackedValueRegistry
                     value => switchSetter.DirectionMode = Mathf.Clamp(value, 0, 2));
                 break;
             case GadgetRoadrunner roadRunner:
-                RegisterRoadrunner(item, roadRunner);
+                item.RegisterTrackedValue("gadget.roadrunner.target", () => roadRunner.LengthMeters,
+                    value => roadRunner.LengthMeters = Mathf.Clamp(value, 0, roadRunner.MaxLength));
                 break;
         }
-    }
-
-    private static void RegisterRoadrunner(NetworkedItem item, GadgetRoadrunner roadRunner)
-    {
-        FieldInfo target = AccessTools.Field(typeof(GadgetRoadrunner), "target");
-        FieldInfo countup = AccessTools.Field(typeof(GadgetRoadrunner), "countup");
-        if (target != null && target.FieldType == typeof(float))
-            item.RegisterTrackedValue("gadget.roadrunner.target", () => (float)target.GetValue(roadRunner), value => target.SetValue(roadRunner, value));
-        if (countup != null && countup.FieldType == typeof(float))
-            item.RegisterTrackedValue("gadget.roadrunner.countup", () => (float)countup.GetValue(roadRunner), value => countup.SetValue(roadRunner, value));
     }
 
     private static void RegisterPrivateBool(NetworkedItem item, string key, object target, string fieldName)
