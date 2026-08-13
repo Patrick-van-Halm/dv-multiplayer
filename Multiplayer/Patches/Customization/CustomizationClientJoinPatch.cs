@@ -25,6 +25,7 @@ internal static class CustomizationClientJoinPatch
     {
         __instance.RegisterExternalSerializablePacket<ClientboundCustomizationStatePacket>(CustomizationSnapshotSync.Receive);
         GadgetStructuralSync.RegisterClient(__instance);
+        CustomizationHoleSync.RegisterClient(__instance);
     }
 
     [HarmonyPostfix]
@@ -32,6 +33,7 @@ internal static class CustomizationClientJoinPatch
     private static void SubscribeServer(NetworkServer __instance)
     {
         GadgetStructuralSync.RegisterServer(__instance);
+        CustomizationHoleSync.RegisterServer(__instance);
     }
 
     [HarmonyPrefix]
