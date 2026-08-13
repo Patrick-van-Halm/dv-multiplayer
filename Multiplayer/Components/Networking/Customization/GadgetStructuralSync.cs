@@ -4,16 +4,22 @@ using MPAPI.Interfaces;
 using MPAPI.Interfaces.Packets;
 using Multiplayer.API;
 using Multiplayer.Components.Networking.World;
+using Multiplayer.Networking.Data;
 using Multiplayer.Networking.Data.Customization;
+using Multiplayer.Networking.Data.Items;
 using Multiplayer.Networking.Managers.Client;
 using Multiplayer.Networking.Managers.Server;
 using Multiplayer.Networking.TransportLayers;
+using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace Multiplayer.Components.Networking.Customization;
 
 internal static class GadgetStructuralSync
 {
+    private const int DependencyWaitFrames = 120;
+
     public static void RegisterClient(NetworkClient client)
     {
         client.RegisterExternalSerializablePacket<GadgetPlacePacket>(ApplyPlace);
@@ -67,7 +73,7 @@ internal static class GadgetStructuralSync
     {
         if (packet == null || !IsFinite(packet.LocalPosition) || !IsFinite(packet.LocalRotation) ||
             !packet.Target.TryResolve(out Customization target) ||
-            !TryGet(packet.GadgetItemNetId, out _, out GadgetItem gadgetItem, out GadgetBase gadget) || gadget.IsLinked)
+            !TryGet(packet.GadgetItemNetId, out NetworkedItem item, out GadgetItem gadgetItem, out GadgetBase gadget) || gadget.IsLinked)
             return;
 
         using (CustomizationSyncScope.Remote(rootAction: true))
@@ -77,7 +83,7 @@ internal static class GadgetStructuralSync
         }
 
         ClearServerOwnership(packet.GadgetItemNetId);
-        Broadcast(server, packet, sender);
+        BroadcastPlace(server, packet, sender, item, gadget);
     }
 
     private static void OnServerRemove(NetworkServer server, GadgetRemovePacket packet, IPlayer sender)
@@ -93,10 +99,36 @@ internal static class GadgetStructuralSync
 
     private static void ApplyPlace(GadgetPlacePacket packet)
     {
-        if (packet == null || !packet.Target.TryResolve(out Customization target) ||
-            !TryGet(packet.GadgetItemNetId, out _, out GadgetItem gadgetItem, out GadgetBase gadget))
+        if (packet == null || !packet.Target.TryResolve(out Customization target))
             return;
 
+        if (!TryGet(packet.GadgetItemNetId, out _, out GadgetItem gadgetItem, out GadgetBase gadget))
+        {
+            NetworkLifecycle.Instance.StartCoroutine(ApplyPlaceWhenReady(packet));
+            return;
+        }
+
+        ApplyPlaceResolved(packet, target, gadgetItem, gadget);
+    }
+
+    private static IEnumerator ApplyPlaceWhenReady(GadgetPlacePacket packet)
+    {
+        for (int frame = 0; frame < DependencyWaitFrames; frame++)
+        {
+            if (packet.Target.TryResolve(out Customization target) &&
+                TryGet(packet.GadgetItemNetId, out _, out GadgetItem gadgetItem, out GadgetBase gadget))
+            {
+                ApplyPlaceResolved(packet, target, gadgetItem, gadget);
+                yield break;
+            }
+            yield return null;
+        }
+
+        Multiplayer.LogWarning($"Customization placement dependency did not resolve for gadget item {packet.GadgetItemNetId}");
+    }
+
+    private static void ApplyPlaceResolved(GadgetPlacePacket packet, Customization target, GadgetItem gadgetItem, GadgetBase gadget)
+    {
         using (CustomizationSyncScope.Remote(rootAction: true))
         {
             if (!gadget.IsLinked)
@@ -121,10 +153,41 @@ internal static class GadgetStructuralSync
             gadget.Remove(packet.ReparentToTrainCar);
     }
 
+    private static void BroadcastPlace(NetworkServer server, GadgetPlacePacket packet, IPlayer sender, NetworkedItem item, GadgetBase gadget)
+    {
+        ITransportPeer excludePeer = (sender as ServerPlayerWrapper)?.Peer;
+        uint tick = NetworkLifecycle.Instance.Tick;
+        foreach (ServerPlayer recipient in server.ServerPlayers)
+        {
+            if (recipient.Peer == server.SelfPeer || recipient.Peer == excludePeer || recipient.LoadingState < PlayerLoadingState.ReadyForCustomizers)
+                continue;
+
+            if (!recipient.KnownItems.ContainsKey(item))
+            {
+                ItemUpdateData create = item.CreateUpdateData(ItemUpdateData.ItemUpdateType.Create);
+                if (create != null)
+                {
+                    create.ItemState = ItemState.Dropped;
+                    create.ItemPosition = gadget.transform.position - WorldMover.currentMove;
+                    create.ItemRotation = gadget.transform.rotation;
+                    server.SendItemsChangePacket(new List<ItemUpdateData> { create }, recipient);
+                    recipient.KnownItems[item] = tick;
+                }
+            }
+
+            server.SendExternalSerializablePacketToPlayer(packet, recipient.Peer, true);
+        }
+    }
+
     private static void Broadcast<T>(NetworkServer server, T packet, IPlayer sender) where T : class, ISerializablePacket, new()
     {
         ITransportPeer excludePeer = (sender as ServerPlayerWrapper)?.Peer;
-        server.SendExternalSerializablePacketToAll(packet, true, excludePeer, excludeSelf: true);
+        foreach (ServerPlayer recipient in server.ServerPlayers)
+        {
+            if (recipient.Peer == server.SelfPeer || recipient.Peer == excludePeer || recipient.LoadingState < PlayerLoadingState.ReadyForCustomizers)
+                continue;
+            server.SendExternalSerializablePacketToPlayer(packet, recipient.Peer, true);
+        }
     }
 
     private static bool IsFinite(Vector3 value) =>
