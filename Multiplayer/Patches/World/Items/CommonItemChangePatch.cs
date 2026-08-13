@@ -46,6 +46,18 @@ internal static class CommonItemChangePatch
     }
 }
 
+[HarmonyPatch(typeof(NetworkedItemManager), "ProcessReceivedAsClient")]
+internal static class MissingClientDestroyPatch
+{
+    [HarmonyPrefix]
+    private static bool Prefix(ItemUpdateData snapshot)
+    {
+        if (snapshot?.UpdateType != ItemUpdateData.ItemUpdateType.Destroy)
+            return true;
+        return NetworkedItem.TryGet(snapshot.ItemNetId, out _);
+    }
+}
+
 [HarmonyPatch(typeof(NetworkedItemManager), "UpdatePlayerItemLists")]
 internal static class InstalledGadgetRelevancePatch
 {
