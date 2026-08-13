@@ -1,5 +1,6 @@
 using DV.Customization.Gadgets.Implementations;
 using DV.InventorySystem;
+using DV.Items;
 using Multiplayer.API;
 using Multiplayer.Components.Networking.World;
 using Multiplayer.Networking.Data;
@@ -86,9 +87,6 @@ internal static class DuctTapeTerminalSync
 
         uint tick = NetworkLifecycle.Instance.Tick;
         player.KnownItems[replacement] = tick;
-
-        // Ordered canonical identity first: the origin already has DV's native empty-tape
-        // replacement and only needs the host-assigned NetId, not a duplicate Create.
         CustomizationPacketSend.SendJoinState(server, player.Peer, new DuctTapeConsumedPacket
         {
             TapeItemNetId = tapeItemNetId,
