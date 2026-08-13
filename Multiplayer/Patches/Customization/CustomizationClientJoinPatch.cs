@@ -68,7 +68,7 @@ internal static class CustomizationClientJoinPatch
             if (waiting && !NetworkLifecycle.Instance.IsHost())
             {
                 client.Log("Waiting for customization state");
-                while (!CustomizationSnapshotSync.CustomizerStateLoaded)
+                while (!CustomizationSnapshotSync.CustomizerStateLoaded || RoadrunnerSync.HasPendingSnapshot)
                     yield return null;
                 allowItems = true;
                 try
