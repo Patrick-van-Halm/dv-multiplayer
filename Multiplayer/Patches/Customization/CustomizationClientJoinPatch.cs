@@ -2,6 +2,7 @@ using HarmonyLib;
 using Multiplayer.Components.Networking;
 using Multiplayer.Components.Networking.Customization;
 using Multiplayer.Networking.Data;
+using Multiplayer.Networking.Data.Customization;
 using Multiplayer.Networking.Managers.Client;
 using System.Collections;
 using System.Reflection;
@@ -17,7 +18,10 @@ internal static class CustomizationClientJoinPatch
 
     [HarmonyPostfix]
     [HarmonyPatch(typeof(NetworkClient), "Subscribe")]
-    private static void Subscribe(NetworkClient __instance) => CustomizationNetworkSync.RegisterClient(__instance);
+    private static void Subscribe(NetworkClient __instance)
+    {
+        __instance.RegisterExternalSerializablePacket<ClientboundCustomizationStatePacket>(CustomizationSnapshotSync.Receive);
+    }
 
     [HarmonyPrefix]
     [HarmonyPatch(typeof(NetworkClient), "SendLoadStateUpdate")]
@@ -26,7 +30,7 @@ internal static class CustomizationClientJoinPatch
         if (newState != PlayerLoadingState.ReadyForItems || allowItems || NetworkLifecycle.Instance.IsHost())
             return true;
 
-        CustomizationNetworkSync.BeginCustomizerJoin();
+        CustomizationSnapshotSync.BeginJoin();
         waiting = true;
         SendLoadStateUpdate.Invoke(__instance, new object[] { PlayerLoadingState.ReadyForCustomizers });
         return false;
@@ -46,7 +50,8 @@ internal static class CustomizationClientJoinPatch
             object current = original.Current;
             if (waiting && !NetworkLifecycle.Instance.IsHost())
             {
-                while (!CustomizationNetworkSync.CustomizerStateLoaded)
+                client.Log("Waiting for customization state");
+                while (!CustomizationSnapshotSync.CustomizerStateLoaded)
                     yield return null;
 
                 allowItems = true;
