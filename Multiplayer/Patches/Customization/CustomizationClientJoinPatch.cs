@@ -4,6 +4,9 @@ using Multiplayer.Components.Networking.Customization;
 using Multiplayer.Networking.Data;
 using Multiplayer.Networking.Data.Customization;
 using Multiplayer.Networking.Managers.Client;
+using Multiplayer.Networking.Managers.Server;
+using Multiplayer.Networking.Packets.Serverbound;
+using Multiplayer.Networking.TransportLayers;
 using System.Collections;
 using System.Reflection;
 
@@ -68,5 +71,31 @@ internal static class CustomizationClientJoinPatch
 
             yield return current;
         }
+    }
+}
+
+[HarmonyPatch(typeof(NetworkServer), "OnServerboundLoadStateUpdatePacket")]
+internal static class CustomizationServerJoinPatch
+{
+    [HarmonyPrefix]
+    private static bool Prefix(NetworkServer __instance, ServerboundLoadStateUpdatePacket packet, ITransportPeer peer)
+    {
+        if (packet.LoadState != PlayerLoadingState.ReadyForCustomizers)
+            return true;
+
+        if (!__instance.TryGetServerPlayer(peer, out ServerPlayer player))
+            return false;
+
+        if (player.LoadingState != PlayerLoadingState.ReadyForTrainSets)
+        {
+            __instance.LogWarning($"Ignoring ReadyForCustomizers from {player.Username} while at {player.LoadingState}");
+            return false;
+        }
+
+        var snapshot = CustomizationSnapshotSync.Build();
+        __instance.Log($"Sending customization state to {player.Username}: {snapshot.Gadgets.Count} gadgets, {snapshot.Holes.Count} free holes");
+        __instance.SendExternalSerializablePacketToPlayer(snapshot, peer, true);
+        player.LoadingState = PlayerLoadingState.ReadyForCustomizers;
+        return false;
     }
 }
