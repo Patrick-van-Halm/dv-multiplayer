@@ -25,7 +25,16 @@ public class TrackedValue<T>
         lastSentValue = valueGetter();
     }
 
-    public bool IsDirty => thresholdComparer(CurrentValue, lastSentValue);
+    public bool IsDirty
+    {
+        get
+        {
+            if (serverAuthoritative && !NetworkLifecycle.Instance.IsHost())
+                return false;
+
+            return thresholdComparer(CurrentValue, lastSentValue);
+        }
+    }
 
     public bool ServerAuthoritative => serverAuthoritative;
 
@@ -60,7 +69,7 @@ public class TrackedValue<T>
 
     private bool DefaultComparer(T current, T last)
     {
-        return !current.Equals(last);
+        return !EqualityComparer<T>.Default.Equals(current, last);
     }
 
     public string GetDebugString()
