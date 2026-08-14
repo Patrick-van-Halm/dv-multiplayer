@@ -44,14 +44,15 @@ internal static class GadgetStructuralObservationPatch
         if (NetworkLifecycle.Instance.IsHost())
             GadgetStructuralSync.ClearServerOwnership(networkedItem.NetId);
 
-        GadgetStructuralSync.SendObserved(new GadgetPlacePacket
+        GadgetPlacePacket packet = new()
         {
             GadgetItemNetId = networkedItem.NetId,
             Target = target,
             LocalPosition = __result.transform.localPosition,
             LocalRotation = __result.transform.localRotation,
             IsOnGlass = __result.IsOnGlass,
-        });
+        };
+        GadgetStructuralSync.SendObservedPlace(packet, networkedItem, __result);
     }
 
     [HarmonyPrefix, HarmonyPatch(typeof(GadgetBase), nameof(GadgetBase.Remove))]
