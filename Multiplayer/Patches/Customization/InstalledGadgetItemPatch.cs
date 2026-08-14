@@ -3,6 +3,7 @@ using HarmonyLib;
 using Multiplayer.Components.Networking;
 using Multiplayer.Components.Networking.World;
 using Multiplayer.Networking.Data;
+using System.Reflection;
 using UnityEngine;
 
 namespace Multiplayer.Patches.Customization;
@@ -10,19 +11,18 @@ namespace Multiplayer.Patches.Customization;
 [HarmonyPatch(typeof(NetworkedItem), nameof(NetworkedItem.GetSnapshot))]
 internal static class InstalledGadgetItemStatePatch
 {
-    private static readonly AccessTools.FieldRef<NetworkedItem, bool> StateDirty =
-        AccessTools.FieldRefAccess<NetworkedItem, bool>("stateDirty");
+    private static readonly FieldInfo StateDirty = AccessTools.Field(typeof(NetworkedItem), "stateDirty");
 
     [HarmonyPrefix]
     private static void Prefix(NetworkedItem __instance)
     {
         if (__instance?.Item?.GetComponent<GadgetItem>()?.Gadget?.IsLinked == true)
-            StateDirty(__instance) = false;
+            StateDirty?.SetValue(__instance, false);
     }
 }
 
 [HarmonyPatch(typeof(NetworkedItemManager), "UpdatePlayerItemLists")]
-internal static class InstalledGadgetItemRelevancePatch
+internal static class CustomizationItemRelevancePatch
 {
     [HarmonyPostfix]
     private static void Postfix()
@@ -43,6 +43,15 @@ internal static class InstalledGadgetItemRelevancePatch
                 if (gadget?.IsLinked == true &&
                     (player.WorldPosition - gadget.transform.position).sqrMagnitude <= NetworkedItemManager.MAX_DISTANCE_TO_ITEM_SQR)
                     player.NearbyItems[item] = now;
+
+                GadgetSolderingTool tool = item?.Item?.GetComponent<GadgetSolderingTool>();
+                if (tool == null || !player.NearbyItems.ContainsKey(item))
+                    continue;
+
+                uint spoolNetId = SolderingMagazineSync.GetSpoolNetId(tool);
+                if (spoolNetId != 0 && spoolNetId <= ushort.MaxValue &&
+                    NetworkedItem.TryGet((ushort)spoolNetId, out NetworkedItem spool))
+                    player.NearbyItems[spool] = now;
             }
         }
     }
