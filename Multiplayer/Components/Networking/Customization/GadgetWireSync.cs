@@ -2,6 +2,7 @@ using DV.Customization.Gadgets;
 using MPAPI.Interfaces;
 using Multiplayer.API;
 using Multiplayer.Components.Networking.World;
+using Multiplayer.Networking.Data;
 using Multiplayer.Networking.Data.Customization;
 using Multiplayer.Networking.Managers.Client;
 using Multiplayer.Networking.Managers.Server;
@@ -158,6 +159,11 @@ internal static class GadgetWireSync
     private static void Broadcast<T>(NetworkServer server, T packet, IPlayer sender) where T : class, MPAPI.Interfaces.Packets.ISerializablePacket, new()
     {
         ITransportPeer excludePeer = (sender as ServerPlayerWrapper)?.Peer;
-        server.SendExternalSerializablePacketToAll(packet, true, excludePeer, excludeSelf: true);
+        foreach (ServerPlayer player in server.ServerPlayers)
+        {
+            if (player.Peer == server.SelfPeer || player.Peer == excludePeer || player.LoadingState < PlayerLoadingState.ReadyForCustomizers)
+                continue;
+            server.SendExternalSerializablePacketToPlayer(packet, player.Peer, true);
+        }
     }
 }
