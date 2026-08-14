@@ -20,27 +20,3 @@ public sealed class DuctTapeConsumedPacket : ISerializablePacket
         EmptyTapeItemNetId = reader.ReadUInt16();
     }
 }
-
-public enum RoadrunnerSyncAction : byte
-{
-    Start,
-    Acknowledge,
-}
-
-public sealed class RoadrunnerSyncPacket : ISerializablePacket
-{
-    public ushort GadgetItemNetId;
-    public RoadrunnerSyncAction Action;
-
-    public void Serialize(BinaryWriter writer)
-    {
-        writer.Write(GadgetItemNetId);
-        writer.Write((byte)Action);
-    }
-
-    public void Deserialize(BinaryReader reader)
-    {
-        GadgetItemNetId = reader.ReadUInt16();
-        Action = (RoadrunnerSyncAction)reader.ReadByte();
-    }
-}
