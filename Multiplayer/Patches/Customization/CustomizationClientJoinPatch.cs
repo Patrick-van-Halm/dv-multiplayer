@@ -47,6 +47,7 @@ internal static class CustomizationClientJoinPatch
     {
         if (newState != PlayerLoadingState.ReadyForItems || allowItems || NetworkLifecycle.Instance.IsHost())
             return true;
+
         CustomizationSnapshotSync.BeginJoin();
         waiting = true;
         SendLoadStateUpdate.Invoke(__instance, new object[] { PlayerLoadingState.ReadyForCustomizers });
@@ -68,8 +69,9 @@ internal static class CustomizationClientJoinPatch
             if (waiting && !NetworkLifecycle.Instance.IsHost())
             {
                 client.Log("Waiting for customization state");
-                while (!CustomizationSnapshotSync.CustomizerStateLoaded || RoadrunnerSync.HasPendingSnapshot)
+                while (!CustomizationSnapshotSync.CustomizerStateLoaded)
                     yield return null;
+
                 allowItems = true;
                 try
                 {
@@ -97,12 +99,9 @@ internal static class CustomizationServerJoinPatch
         if (!__instance.TryGetServerPlayer(peer, out ServerPlayer player))
             return false;
         if (player.LoadingState != PlayerLoadingState.ReadyForTrainSets)
-        {
-            __instance.LogWarning($"Ignoring ReadyForCustomizers from {player.Username} while at {player.LoadingState}");
             return false;
-        }
 
-        var snapshot = CustomizationSnapshotSync.Build();
+        ClientboundCustomizationStatePacket snapshot = CustomizationSnapshotSync.Build();
         uint tick = NetworkLifecycle.Instance.Tick;
         foreach (GadgetPlacementState placement in snapshot.Gadgets)
         {
@@ -110,7 +109,7 @@ internal static class CustomizationServerJoinPatch
                 player.KnownItems[item] = tick;
         }
 
-        __instance.Log($"Sending customization state to {player.Username}: {snapshot.Gadgets.Count} gadgets, {snapshot.Mounts.Count} mounts, {snapshot.Wires.Count} wires, {snapshot.Holes.Count} free holes");
+        __instance.Log($"Sending customization state to {player.Username}: {snapshot.Gadgets.Count} gadgets, {snapshot.Mounts.Count} mounts, {snapshot.Wires.Count} wires, {snapshot.Snaps.Count} snaps, {snapshot.Holes.Count} free holes");
         CustomizationPacketSend.SendJoinState(__instance, peer, snapshot);
         player.LoadingState = PlayerLoadingState.ReadyForCustomizers;
         return false;
