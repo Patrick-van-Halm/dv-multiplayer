@@ -126,11 +126,13 @@ public static class GadgetTrackedValueRegistry
                     {
                         RoadrunnerCountup.SetValue(roadRunner, (double)value);
                         RoadrunnerLastDirection?.SetValue(roadRunner, null);
-                    }, (_, _) => false, true);
+                    }, serverAuthoritative: true);
                 }
                 if (SetRoadrunnerCompleted != null)
+                {
                     item.RegisterTrackedValue("gadget.roadrunner.completed", () => roadRunner.HasCompleted,
-                        value => SetRoadrunnerCompleted.Invoke(roadRunner, new object[] { value }), (_, _) => false, true);
+                        value => SetRoadrunnerCompleted.Invoke(roadRunner, new object[] { value }), serverAuthoritative: true);
+                }
                 break;
             case GadgetSwitch gadgetSwitch:
                 item.RegisterTrackedValue("gadget.switch.value", () => gadgetSwitch.RawOutputValue,
