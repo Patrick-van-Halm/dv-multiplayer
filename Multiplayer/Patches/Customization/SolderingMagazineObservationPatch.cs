@@ -2,11 +2,8 @@ using DV.Customization.Gadgets;
 using DV.Items;
 using HarmonyLib;
 using Multiplayer.Components.Networking.Customization;
-using Multiplayer.Networking.Data;
 using Multiplayer.Networking.Managers.Client;
 using Multiplayer.Networking.Managers.Server;
-using Multiplayer.Networking.Packets.Serverbound;
-using Multiplayer.Networking.TransportLayers;
 using UnityEngine;
 
 namespace Multiplayer.Patches.Customization;
@@ -20,6 +17,7 @@ internal static class SolderingMagazineObservationPatch
     {
         if (!__result || __instance is not ItemMagazine magazine || item == null || magazine[0] != item)
             return;
+
         GadgetSolderingTool tool = magazine.GetComponent<GadgetSolderingTool>();
         if (tool != null)
             SolderingMagazineSync.ObserveLoadedSpool(tool, item);
@@ -47,15 +45,4 @@ internal static class SolderingMagazineObservationPatch
     [HarmonyPostfix]
     [HarmonyPatch(typeof(NetworkServer), "Subscribe")]
     private static void SubscribeServer(NetworkServer __instance) => SolderingMagazineSync.RegisterServer(__instance);
-
-    [HarmonyPrefix]
-    [HarmonyPriority(Priority.High)]
-    [HarmonyPatch(typeof(NetworkServer), "OnServerboundLoadStateUpdatePacket")]
-    private static void SendJoinState(NetworkServer __instance, ServerboundLoadStateUpdatePacket packet, ITransportPeer peer)
-    {
-        if (packet.LoadState == PlayerLoadingState.ReadyForCustomizers &&
-            __instance.TryGetServerPlayer(peer, out ServerPlayer player) &&
-            player.LoadingState == PlayerLoadingState.ReadyForTrainSets)
-            SolderingMagazineSync.SendJoinState(__instance, player);
-    }
 }
