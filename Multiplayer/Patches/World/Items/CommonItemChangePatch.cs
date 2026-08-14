@@ -13,43 +13,33 @@ namespace Multiplayer.Patches.World.Items;
 internal static class CommonItemChangePatch
 {
     [HarmonyPostfix]
-    private static void ReceiveItemChanges(
-        NetworkServer __instance,
-        CommonItemChangePacket packet,
-        ITransportPeer peer)
+    private static void ReceiveItemChanges(NetworkServer __instance, CommonItemChangePacket packet, ITransportPeer peer)
     {
-        if (!__instance.TryGetServerPlayer(peer, out var player))
-            return;
-
-        if (packet?.Items == null)
+        if (!__instance.TryGetServerPlayer(peer, out var player) || packet?.Items == null)
             return;
 
         NetworkedItemManager.Instance.ReceiveSnapshots(packet.Items, player);
 
-        // Applying a received tracked value makes the host copy clean. Forward valid
-        // updates so other clients see accepted client changes without a new protocol.
-        List<ItemUpdateData> relay = null;
-        foreach (var snapshot in packet.Items)
-        {
-            if (snapshot == null || snapshot.UpdateType == ItemUpdateData.ItemUpdateType.Create)
-                continue;
-
-            if (!NetworkedItem.TryGet(snapshot.ItemNetId, out _))
-                continue;
-
-            relay ??= new List<ItemUpdateData>();
-            relay.Add(snapshot);
-        }
-
-        if (relay == null)
-            return;
-
+        // ReceiveSnapshot marks tracked values clean on the host, so pass the received
+        // update on to clients that already know the item.
         foreach (var otherPlayer in __instance.ServerPlayers)
         {
             if (otherPlayer == player || otherPlayer.LoadingState < PlayerLoadingState.ReadyForItems)
                 continue;
 
-            __instance.SendItemsChangePacket(relay, otherPlayer);
+            List<ItemUpdateData> updates = null;
+            foreach (var snapshot in packet.Items)
+            {
+                if (snapshot == null || snapshot.UpdateType == ItemUpdateData.ItemUpdateType.Create ||
+                    !NetworkedItem.TryGet(snapshot.ItemNetId, out var item) || !otherPlayer.KnownItems.ContainsKey(item))
+                    continue;
+
+                updates ??= new List<ItemUpdateData>();
+                updates.Add(snapshot);
+            }
+
+            if (updates != null)
+                __instance.SendItemsChangePacket(updates, otherPlayer);
         }
     }
 }
