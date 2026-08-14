@@ -8,12 +8,9 @@ using Multiplayer.Components.Networking;
 using Multiplayer.Components.Networking.Customization;
 using Multiplayer.Components.Networking.Customization.Gadgets;
 using Multiplayer.Components.Networking.World;
-using Multiplayer.Networking.Data;
 using Multiplayer.Networking.Data.Customization;
 using Multiplayer.Networking.Managers.Client;
 using Multiplayer.Networking.Managers.Server;
-using Multiplayer.Networking.Packets.Serverbound;
-using Multiplayer.Networking.TransportLayers;
 using System;
 using UnityEngine;
 
@@ -27,9 +24,10 @@ internal static class GadgetItemRegistrationPatch
     {
         if (__instance?.Item == null || __instance.Gadget == null)
             return;
+
         NetworkedItem networkedItem = __instance.GetComponent<NetworkedItem>() ?? __instance.gameObject.AddComponent<NetworkedItem>();
         networkedItem.Initialize(__instance);
-        GadgetTrackedValueRegistry.Register(networkedItem, __instance, __instance.Gadget);
+        GadgetTrackedValueRegistry.Register(networkedItem, __instance.Gadget);
         networkedItem.FinaliseTrackedValues();
     }
 }
@@ -44,8 +42,10 @@ internal static class GadgetStructuralObservationPatch
             !NetworkedItem.TryGetNetworkedItem(gadgetItem.Item, out NetworkedItem networkedItem) || networkedItem.NetId == 0 ||
             !CustomizationRef.TryFrom(destination, out CustomizationRef target))
             return;
+
         if (NetworkLifecycle.Instance.IsHost())
             GadgetStructuralSync.ClearServerOwnership(networkedItem.NetId);
+
         GadgetStructuralSync.SendObserved(new GadgetPlacePacket
         {
             GadgetItemNetId = networkedItem.NetId,
@@ -69,6 +69,7 @@ internal static class GadgetStructuralObservationPatch
         if (CustomizationSyncScope.IsApplyingRemote || __result?.Item == null ||
             !NetworkedItem.TryGetNetworkedItem(__result.Item, out NetworkedItem networkedItem) || networkedItem.NetId == 0)
             return;
+
         GadgetStructuralSync.SendObserved(new GadgetRemovePacket
         {
             GadgetItemNetId = networkedItem.NetId,
@@ -95,16 +96,20 @@ internal static class GadgetSnapObservationPatch
             !GadgetSnapSync.TryDescribe(point, out ushort ownerId, out int pointIndex) ||
             !NetworkedItem.TryGetNetworkedItem(itemToSnap, out NetworkedItem attached) || attached.NetId == 0)
             return;
+
         Transform anchor = itemToSnap.SnappableItem?.GetAnchor(point.SnapPointType);
         SnapPointAnchorSliding sliding = anchor?.GetComponent<SnapPointAnchorSliding>();
-        GadgetStructuralSync.SendObserved(new GadgetSnapPacket { State = new GadgetSnapState
+        GadgetStructuralSync.SendObserved(new GadgetSnapPacket
         {
-            TargetGadgetItemNetId = ownerId,
-            AttachedItemNetId = attached.NetId,
-            SnapPointIndex = pointIndex,
-            HasSlidingAnchor = sliding != null,
-            SlidingAnchorLocalPosition = sliding != null ? sliding.transform.localPosition : default,
-        }});
+            State = new GadgetSnapState
+            {
+                TargetGadgetItemNetId = ownerId,
+                AttachedItemNetId = attached.NetId,
+                SnapPointIndex = pointIndex,
+                HasSlidingAnchor = sliding != null,
+                SlidingAnchorLocalPosition = sliding != null ? sliding.transform.localPosition : default,
+            }
+        });
     }
 
     [HarmonyPrefix, HarmonyPatch(typeof(ItemSnapPointBase), nameof(ItemSnapPointBase.UnsnapItem), new[] { typeof(bool) })]
@@ -121,6 +126,7 @@ internal static class GadgetSnapObservationPatch
             !GadgetSnapSync.TryDescribe(point, out ushort ownerId, out int pointIndex) ||
             !NetworkedItem.TryGetNetworkedItem(__state, out NetworkedItem attached) || attached.NetId == 0)
             return;
+
         GadgetStructuralSync.SendObserved(new GadgetUnsnapPacket
         {
             TargetGadgetItemNetId = ownerId,
@@ -154,13 +160,4 @@ internal static class RoadrunnerObservationPatch
 
     [HarmonyPostfix, HarmonyPatch(typeof(NetworkServer), "Subscribe")]
     private static void SubscribeServer(NetworkServer __instance) => RoadrunnerSync.RegisterServer(__instance);
-
-    [HarmonyPrefix, HarmonyPriority(Priority.High), HarmonyPatch(typeof(NetworkServer), "OnServerboundLoadStateUpdatePacket")]
-    private static void SendJoinState(NetworkServer __instance, ServerboundLoadStateUpdatePacket packet, ITransportPeer peer)
-    {
-        if (packet.LoadState == PlayerLoadingState.ReadyForCustomizers &&
-            __instance.TryGetServerPlayer(peer, out ServerPlayer player) &&
-            player.LoadingState == PlayerLoadingState.ReadyForTrainSets)
-            RoadrunnerSync.SendJoinState(__instance, player);
-    }
 }
