@@ -20,8 +20,8 @@ internal static class CommonItemChangePatch
 
         NetworkedItemManager.Instance.ReceiveSnapshots(packet.Items, player);
 
-        // ReceiveSnapshot marks tracked values clean on the host, so pass the received
-        // update on to clients that already know the item.
+        // Applying a client tracked-value snapshot makes the host value clean. Relay the
+        // received update to peers that already know the item, using the existing item packet.
         foreach (var otherPlayer in __instance.ServerPlayers)
         {
             if (otherPlayer == player || otherPlayer.LoadingState < PlayerLoadingState.ReadyForItems)
@@ -31,7 +31,7 @@ internal static class CommonItemChangePatch
             foreach (var snapshot in packet.Items)
             {
                 if (snapshot == null || snapshot.UpdateType == ItemUpdateData.ItemUpdateType.Create ||
-                    !NetworkedItem.TryGet(snapshot.ItemNetId, out var item) || !otherPlayer.KnownItems.ContainsKey(item))
+                    !NetworkedItem.TryGet(snapshot.ItemNetId, out NetworkedItem item) || !otherPlayer.KnownItems.ContainsKey(item))
                     continue;
 
                 updates ??= new List<ItemUpdateData>();
@@ -41,5 +41,16 @@ internal static class CommonItemChangePatch
             if (updates != null)
                 __instance.SendItemsChangePacket(updates, otherPlayer);
         }
+    }
+}
+
+[HarmonyPatch(typeof(NetworkedItemManager), "ProcessReceivedAsClient")]
+internal static class MissingReplacementDestroyPatch
+{
+    [HarmonyPrefix]
+    private static bool Prefix(ItemUpdateData snapshot)
+    {
+        return snapshot?.UpdateType != ItemUpdateData.ItemUpdateType.Destroy ||
+            NetworkedItem.TryGet(snapshot.ItemNetId, out _);
     }
 }
