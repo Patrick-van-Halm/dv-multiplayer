@@ -101,7 +101,7 @@ internal static class CustomizationHoleSync
         {
             if (player.Peer == server.SelfPeer || player.Peer == excludePeer || player.LoadingState < PlayerLoadingState.ReadyForCustomizers)
                 continue;
-            server.SendExternalSerializablePacketToPlayer(packet, player.Peer, true);
+            CustomizationPacketSend.SendJoinState(server, player.Peer, packet);
         }
     }
 
