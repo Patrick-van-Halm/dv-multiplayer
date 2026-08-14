@@ -63,7 +63,7 @@ internal static class RoadrunnerActionSync
         }
         else
         {
-            NetworkLifecycle.Instance.Client.SendExternalSerializablePacketToServer(packet, true);
+            CustomizationPacketSend.SendToServer(NetworkLifecycle.Instance.Client, packet);
         }
     }
 
