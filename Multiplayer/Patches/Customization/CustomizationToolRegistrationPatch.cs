@@ -27,7 +27,7 @@ internal static class CustomizationToolRegistrationPatch
         networkedItem.Initialize(__instance);
         networkedItem.RegisterTrackedValue("ductTape.usesLeft", () => __instance.usesLeft, value =>
         {
-            __instance.usesLeft = value;
+            __instance.usesLeft = Mathf.Clamp(value, 0, __instance.numberOfUses);
             __instance.tapeModelUpdater?.UpdateActiveStates(__instance.PercentageUsesLeft);
         });
         networkedItem.FinaliseTrackedValues();
