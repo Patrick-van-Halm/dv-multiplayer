@@ -13,12 +13,19 @@ namespace Multiplayer.Patches.Customization;
 internal static class InstalledGadgetItemStatePatch
 {
     private static readonly FieldInfo StateDirty = AccessTools.Field(typeof(NetworkedItem), "stateDirty");
+    private static readonly FieldInfo LastState = AccessTools.Field(typeof(NetworkedItem), "lastState");
 
     [HarmonyPrefix]
     private static void Prefix(NetworkedItem __instance)
     {
-        if (__instance?.Item?.GetComponent<GadgetItem>()?.Gadget?.IsLinked == true)
-            StateDirty?.SetValue(__instance, false);
+        if (__instance?.Item?.GetComponent<GadgetItem>()?.Gadget?.IsLinked != true)
+            return;
+
+        // Placement/removal is synchronized by the native customization action. Keep the
+        // hidden GadgetItem shell from being reinterpreted as a dropped world item while
+        // still allowing its tracked gadget values through the normal item snapshot path.
+        StateDirty?.SetValue(__instance, false);
+        LastState?.SetValue(__instance, ItemState.Dropped);
     }
 }
 
