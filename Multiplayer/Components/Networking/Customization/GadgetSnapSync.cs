@@ -85,6 +85,18 @@ internal static class GadgetSnapSync
 
     public static void ApplySnapshot(ClientboundCustomizationStatePacket packet)
     {
+        foreach (NetworkedItem item in NetworkedItem.GetAll().ToArray())
+        {
+            GadgetBase gadget = item?.Item?.GetComponent<GadgetItem>()?.Gadget;
+            if (gadget == null || !gadget.IsLinked)
+                continue;
+            foreach (SnapPointGadget point in gadget.GetComponentsInChildren<SnapPointGadget>(true))
+            {
+                if (point.SnappedItem != null)
+                    point.UnsnapItem(true);
+            }
+        }
+
         foreach (GadgetSnapState state in packet.Snaps)
         {
             if (state != null)
