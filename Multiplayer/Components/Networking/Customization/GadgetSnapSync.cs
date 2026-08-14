@@ -190,7 +190,7 @@ internal static class GadgetSnapSync
         {
             if (recipient.Peer == server.SelfPeer || recipient.Peer == excludePeer || recipient.LoadingState < Multiplayer.Networking.Data.PlayerLoadingState.ReadyForCustomizers)
                 continue;
-            server.SendExternalSerializablePacketToPlayer(packet, recipient.Peer, true);
+            CustomizationPacketSend.SendJoinState(server, recipient.Peer, packet);
         }
     }
 }
