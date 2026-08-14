@@ -39,9 +39,18 @@ internal static class GadgetStructuralSync
             return;
 
         if (lifecycle.IsHost())
-            lifecycle.Server.SendExternalSerializablePacketToAll(packet, true, excludeSelf: true);
+        {
+            foreach (ServerPlayer player in lifecycle.Server.ServerPlayers)
+            {
+                if (player.Peer == lifecycle.Server.SelfPeer || player.LoadingState < PlayerLoadingState.ReadyForCustomizers)
+                    continue;
+                CustomizationPacketSend.SendJoinState(lifecycle.Server, player.Peer, packet);
+            }
+        }
         else
+        {
             lifecycle.Client.SendExternalSerializablePacketToServer(packet, true);
+        }
     }
 
     public static bool TryGet(ushort itemNetId, out NetworkedItem item, out GadgetItem gadgetItem, out GadgetBase gadget)
@@ -175,7 +184,7 @@ internal static class GadgetStructuralSync
                 }
             }
 
-            server.SendExternalSerializablePacketToPlayer(packet, recipient.Peer, true);
+            CustomizationPacketSend.SendJoinState(server, recipient.Peer, packet);
         }
     }
 
@@ -186,7 +195,7 @@ internal static class GadgetStructuralSync
         {
             if (recipient.Peer == server.SelfPeer || recipient.Peer == excludePeer || recipient.LoadingState < PlayerLoadingState.ReadyForCustomizers)
                 continue;
-            server.SendExternalSerializablePacketToPlayer(packet, recipient.Peer, true);
+            CustomizationPacketSend.SendJoinState(server, recipient.Peer, packet);
         }
     }
 
