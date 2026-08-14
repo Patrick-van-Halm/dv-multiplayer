@@ -52,8 +52,14 @@ internal static class CustomizationToolJoinSync
         GadgetSnapSync.AppendSnapshot(snapState);
         foreach (GadgetSnapState snap in snapState.Snaps)
         {
-            if (snap != null && NetworkedItem.TryGet(snap.AttachedItemNetId, out NetworkedItem attached))
-                AddCurrentItem(packet, added, attached);
+            if (snap == null || !NetworkedItem.TryGet(snap.AttachedItemNetId, out NetworkedItem attached))
+                continue;
+
+            GadgetBase attachedGadget = attached?.Item?.GetComponent<GadgetItem>()?.Gadget;
+            if (attachedGadget?.IsLinked == true)
+                continue;
+
+            AddCurrentItem(packet, added, attached);
         }
 
         return packet;
