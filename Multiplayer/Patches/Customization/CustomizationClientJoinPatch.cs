@@ -29,6 +29,7 @@ internal static class CustomizationClientJoinPatch
         GadgetStructuralSync.RegisterClient(__instance);
         GadgetMountSync.RegisterClient(__instance);
         GadgetWireSync.RegisterClient(__instance);
+        GadgetSnapSync.RegisterClient(__instance);
         CustomizationHoleSync.RegisterClient(__instance);
     }
 
@@ -39,6 +40,7 @@ internal static class CustomizationClientJoinPatch
         GadgetStructuralSync.RegisterServer(__instance);
         GadgetMountSync.RegisterServer(__instance);
         GadgetWireSync.RegisterServer(__instance);
+        GadgetSnapSync.RegisterServer(__instance);
         CustomizationHoleSync.RegisterServer(__instance);
     }
 
@@ -118,7 +120,7 @@ internal static class CustomizationServerJoinPatch
                 player.KnownItems[item] = tick;
         }
 
-        __instance.Log($"Sending customization state to {player.Username}: {tools.Items.Count} tool items, {snapshot.Gadgets.Count} gadgets, {snapshot.Mounts.Count} mounts, {snapshot.Wires.Count} wires, {snapshot.Snaps.Count} snaps, {snapshot.Holes.Count} free holes");
+        __instance.Log($"Sending customization state to {player.Username}: {tools.Items.Count} item dependencies, {snapshot.Gadgets.Count} gadgets, {snapshot.Mounts.Count} mounts, {snapshot.Wires.Count} wires, {snapshot.Snaps.Count} snaps, {snapshot.Holes.Count} free holes");
         CustomizationPacketSend.SendJoinState(__instance, peer, tools);
         CustomizationPacketSend.SendJoinState(__instance, peer, snapshot);
         player.LoadingState = PlayerLoadingState.ReadyForCustomizers;
