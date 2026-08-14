@@ -59,7 +59,7 @@ public readonly struct CustomizationRef
         customization = null;
         if (Kind == CustomizationTargetKind.TrainCar)
         {
-            if (!NetworkedTrainCar.TryGet(TrainCarNetId, out var networkedTrainCar))
+            if (!NetworkedTrainCar.TryGet(TrainCarNetId, out NetworkedTrainCar networkedTrainCar))
                 return false;
 
             customization = networkedTrainCar.TrainCar?.Customization;
