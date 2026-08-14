@@ -20,11 +20,9 @@ internal static class CommonItemChangePatch
 
         NetworkedItemManager.Instance.ReceiveSnapshots(packet.Items, player);
 
-        // Applying a client tracked-value snapshot makes the host value clean. Relay the
-        // received update to peers that already know the item, using the existing item packet.
         foreach (var otherPlayer in __instance.ServerPlayers)
         {
-            if (otherPlayer == player || otherPlayer.LoadingState < PlayerLoadingState.ReadyForItems)
+            if (otherPlayer == player || otherPlayer.LoadingState < PlayerLoadingState.ReadyForCustomizers)
                 continue;
 
             List<ItemUpdateData> updates = null;
