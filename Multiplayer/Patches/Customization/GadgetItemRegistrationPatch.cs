@@ -11,12 +11,12 @@ internal static class GadgetItemRegistrationPatch
     [HarmonyPostfix]
     private static void Awake(GadgetItem __instance)
     {
-        if (__instance?.Item == null || __instance.Gadget == null)
+        if (__instance?.Gadget == null)
             return;
 
         NetworkedItem networkedItem = __instance.GetComponent<NetworkedItem>() ?? __instance.gameObject.AddComponent<NetworkedItem>();
         networkedItem.Initialize(__instance);
-        GadgetTrackedValueRegistry.Register(networkedItem, __instance, __instance.Gadget);
+        GadgetTrackedValueRegistry.Register(networkedItem, __instance.Gadget);
         networkedItem.FinaliseTrackedValues();
     }
 }
