@@ -11,6 +11,9 @@ namespace Multiplayer.Components.Networking.Customization.Gadgets;
 public static class GadgetTrackedValueRegistry
 {
     private static readonly MethodInfo SetMountPointGlass = AccessTools.PropertySetter(typeof(MountPoint), nameof(MountPoint.IsOnGlass));
+    private static readonly FieldInfo RoadrunnerCountup = AccessTools.Field(typeof(GadgetRoadrunner), "countup");
+    private static readonly FieldInfo RoadrunnerLastDirection = AccessTools.Field(typeof(GadgetRoadrunner), "lastDirectionReversed");
+    private static readonly MethodInfo SetRoadrunnerCompleted = AccessTools.PropertySetter(typeof(GadgetRoadrunner), nameof(GadgetRoadrunner.HasCompleted));
 
     public static void Register(NetworkedItem item, GadgetBase gadget)
     {
@@ -118,6 +121,19 @@ public static class GadgetTrackedValueRegistry
             case GadgetRoadrunner roadRunner:
                 item.RegisterTrackedValue("gadget.roadrunner.target", () => roadRunner.LengthMeters,
                     value => roadRunner.LengthMeters = value);
+                if (RoadrunnerCountup != null)
+                {
+                    item.RegisterTrackedValue("gadget.roadrunner.countup", () => roadRunner.Countup, value =>
+                    {
+                        RoadrunnerCountup.SetValue(roadRunner, (double)value);
+                        RoadrunnerLastDirection?.SetValue(roadRunner, null);
+                    }, (_, _) => false, true);
+                }
+                if (SetRoadrunnerCompleted != null)
+                {
+                    item.RegisterTrackedValue("gadget.roadrunner.completed", () => roadRunner.HasCompleted,
+                        value => SetRoadrunnerCompleted.Invoke(roadRunner, new object[] { value }), (_, _) => false, true);
+                }
                 break;
         }
     }
