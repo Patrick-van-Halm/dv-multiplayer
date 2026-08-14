@@ -37,18 +37,26 @@ internal static class DuctTapeTerminalSync
 
     public static void ObserveTerminalUse(ushort tapeItemNetId, Vector3 previousPosition)
     {
-        if (tapeItemNetId == 0 || CustomizationSyncScope.IsApplyingRemote || NetworkLifecycle.Instance.IsHost())
+        if (tapeItemNetId == 0 || CustomizationSyncScope.IsApplyingRemote)
             return;
 
-        NetworkedItem replacement = FindLocalEmptyReplacement(previousPosition);
-        if (replacement != null)
-            pendingLocalReplacements[tapeItemNetId] = new WeakReference<NetworkedItem>(replacement);
+        if (NetworkLifecycle.Instance.IsHost())
+        {
+            NetworkedItem replacement = FindEmptyReplacement(previousPosition, requireUnassigned: false);
+            if (replacement != null && replacement.NetId != 0)
+                BroadcastHostReplacement(tapeItemNetId, replacement);
+            return;
+        }
 
-        NetworkLifecycle.Instance.Client.SendExternalSerializablePacketToServer(new DuctTapeConsumedPacket
+        NetworkedItem localReplacement = FindEmptyReplacement(previousPosition, requireUnassigned: true);
+        if (localReplacement != null)
+            pendingLocalReplacements[tapeItemNetId] = new WeakReference<NetworkedItem>(localReplacement);
+
+        CustomizationPacketSend.SendToServer(NetworkLifecycle.Instance.Client, new DuctTapeConsumedPacket
         {
             TapeItemNetId = tapeItemNetId,
             EmptyTapeItemNetId = 0,
-        }, true);
+        });
     }
 
     private static void ReplaceForRemotePlayer(NetworkServer server, ServerPlayer player, ushort tapeItemNetId)
@@ -86,8 +94,7 @@ internal static class DuctTapeTerminalSync
             emptyObject.SetActive(false);
         }
 
-        uint tick = NetworkLifecycle.Instance.Tick;
-        player.KnownItems[replacement] = tick;
+        player.KnownItems[replacement] = NetworkLifecycle.Instance.Tick;
         CustomizationPacketSend.SendJoinState(server, player.Peer, new DuctTapeConsumedPacket
         {
             TapeItemNetId = tapeItemNetId,
@@ -97,19 +104,57 @@ internal static class DuctTapeTerminalSync
         foreach (ServerPlayer recipient in server.ServerPlayers)
         {
             if (recipient == player || recipient.Peer == server.SelfPeer ||
-                recipient.LoadingState < PlayerLoadingState.ReadyForItems)
+                recipient.LoadingState < PlayerLoadingState.ReadyForCustomizers)
                 continue;
 
-            ItemUpdateData create = replacement.CreateUpdateData(ItemUpdateData.ItemUpdateType.Create);
-            if (create == null)
-                continue;
-            create.ItemState = ItemState.InInventory;
-            create.Player = player.PlayerId;
-            server.SendItemsChangePacket(new List<ItemUpdateData> { create }, recipient);
-            recipient.KnownItems[replacement] = tick;
+            SendReplacementCreate(server, recipient, replacement, player.PlayerId);
+            CustomizationPacketSend.SendJoinState(server, recipient.Peer, new DuctTapeConsumedPacket
+            {
+                TapeItemNetId = tapeItemNetId,
+                EmptyTapeItemNetId = replacement.NetId,
+            });
         }
 
         UnityEngine.Object.Destroy(oldItem.gameObject);
+    }
+
+    private static void BroadcastHostReplacement(ushort oldItemNetId, NetworkedItem replacement)
+    {
+        NetworkServer server = NetworkLifecycle.Instance.Server;
+        if (server == null || replacement?.Item == null)
+            return;
+
+        foreach (ServerPlayer recipient in server.ServerPlayers)
+        {
+            if (recipient.Peer == server.SelfPeer || recipient.LoadingState < PlayerLoadingState.ReadyForCustomizers)
+                continue;
+
+            SendReplacementCreate(server, recipient, replacement, 0);
+            CustomizationPacketSend.SendJoinState(server, recipient.Peer, new DuctTapeConsumedPacket
+            {
+                TapeItemNetId = oldItemNetId,
+                EmptyTapeItemNetId = replacement.NetId,
+            });
+        }
+    }
+
+    private static void SendReplacementCreate(NetworkServer server, ServerPlayer recipient, NetworkedItem replacement, byte ownerId)
+    {
+        if (recipient.KnownItems.ContainsKey(replacement))
+            return;
+
+        ItemUpdateData create = replacement.CreateUpdateData(ItemUpdateData.ItemUpdateType.Create);
+        if (create == null)
+            return;
+
+        if (ownerId != 0)
+        {
+            create.ItemState = ItemState.InInventory;
+            create.Player = ownerId;
+        }
+
+        server.SendItemsChangePacket(new List<ItemUpdateData> { create }, recipient);
+        recipient.KnownItems[replacement] = NetworkLifecycle.Instance.Tick;
     }
 
     private static void ApplyCanonicalReplacement(DuctTapeConsumedPacket packet)
@@ -117,17 +162,21 @@ internal static class DuctTapeTerminalSync
         if (packet == null || packet.TapeItemNetId == 0 || packet.EmptyTapeItemNetId == 0)
             return;
 
-        if (!pendingLocalReplacements.TryGetValue(packet.TapeItemNetId, out WeakReference<NetworkedItem> weakReference))
-            return;
+        if (pendingLocalReplacements.TryGetValue(packet.TapeItemNetId, out WeakReference<NetworkedItem> weakReference))
+        {
+            pendingLocalReplacements.Remove(packet.TapeItemNetId);
+            if (weakReference.TryGetTarget(out NetworkedItem replacement) && replacement != null && replacement.Item != null)
+            {
+                replacement.NetId = packet.EmptyTapeItemNetId;
+                return;
+            }
+        }
 
-        pendingLocalReplacements.Remove(packet.TapeItemNetId);
-        if (!weakReference.TryGetTarget(out NetworkedItem replacement) || replacement == null || replacement.Item == null)
-            return;
-
-        replacement.NetId = packet.EmptyTapeItemNetId;
+        if (NetworkedItem.TryGet(packet.TapeItemNetId, out NetworkedItem oldItem) && oldItem != null)
+            UnityEngine.Object.Destroy(oldItem.gameObject);
     }
 
-    private static NetworkedItem FindLocalEmptyReplacement(Vector3 previousPosition)
+    private static NetworkedItem FindEmptyReplacement(Vector3 previousPosition, bool requireUnassigned)
     {
         Inventory inventory = SingletonBehaviour<Inventory>.Instance;
         if (inventory == null)
@@ -141,7 +190,7 @@ internal static class DuctTapeTerminalSync
                 continue;
 
             NetworkedItem candidate = emptyTape.GetComponent<NetworkedItem>() ?? emptyTape.GetComponentInParent<NetworkedItem>();
-            if (candidate == null || candidate.NetId != 0 || candidate.Item == null ||
+            if (candidate == null || candidate.Item == null || (requireUnassigned && candidate.NetId != 0) ||
                 inventory.GetEquipSlotForItem(candidate.Item.gameObject) < 0)
                 continue;
 
