@@ -30,6 +30,7 @@ internal static class CustomizationClientJoinPatch
         GadgetMountSync.RegisterClient(__instance);
         GadgetWireSync.RegisterClient(__instance);
         GadgetSnapSync.RegisterClient(__instance);
+        RoadrunnerActionSync.RegisterClient(__instance);
         CustomizationHoleSync.RegisterClient(__instance);
     }
 
@@ -41,6 +42,7 @@ internal static class CustomizationClientJoinPatch
         GadgetMountSync.RegisterServer(__instance);
         GadgetWireSync.RegisterServer(__instance);
         GadgetSnapSync.RegisterServer(__instance);
+        RoadrunnerActionSync.RegisterServer(__instance);
         CustomizationHoleSync.RegisterServer(__instance);
     }
 
