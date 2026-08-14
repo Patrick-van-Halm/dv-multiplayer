@@ -53,6 +53,18 @@ internal static class GadgetMountSync
 
     public static void ApplySnapshot(ClientboundCustomizationStatePacket packet)
     {
+        foreach (NetworkedItem item in NetworkedItem.GetAll().ToArray())
+        {
+            GadgetBase gadget = item?.Item?.GetComponent<GadgetItem>()?.Gadget;
+            if (gadget == null || !gadget.IsLinked)
+                continue;
+            foreach (Mount mount in gadget.GetComponentsInChildren<Mount>(true))
+            {
+                if (mount.MountedGadget != null)
+                    mount.UnmountGadget();
+            }
+        }
+
         foreach (GadgetMountState state in packet.Mounts)
         {
             if (state == null)
