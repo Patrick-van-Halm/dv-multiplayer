@@ -49,7 +49,7 @@ internal static class GadgetStructuralSync
         }
         else
         {
-            lifecycle.Client.SendExternalSerializablePacketToServer(packet, true);
+            CustomizationPacketSend.SendToServer(lifecycle.Client, packet);
         }
     }
 
@@ -62,7 +62,7 @@ internal static class GadgetStructuralSync
         if (lifecycle.IsHost())
             BroadcastPlace(lifecycle.Server, packet, null, item, gadget);
         else
-            lifecycle.Client.SendExternalSerializablePacketToServer(packet, true);
+            CustomizationPacketSend.SendToServer(lifecycle.Client, packet);
     }
 
     public static bool TryGet(ushort itemNetId, out NetworkedItem item, out GadgetItem gadgetItem, out GadgetBase gadget)
