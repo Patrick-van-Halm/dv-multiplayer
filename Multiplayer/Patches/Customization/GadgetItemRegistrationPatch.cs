@@ -133,3 +133,23 @@ internal static class GadgetSnapObservationPatch
         });
     }
 }
+
+[HarmonyPatch]
+internal static class RoadrunnerObservationPatch
+{
+    [HarmonyPrefix, HarmonyPatch(typeof(GadgetRoadrunner), "Update")]
+    private static void BeforeUpdate() => RoadrunnerActionSync.EnterNativeUpdate();
+
+    [HarmonyFinalizer, HarmonyPatch(typeof(GadgetRoadrunner), "Update")]
+    private static Exception AfterUpdate(Exception __exception)
+    {
+        RoadrunnerActionSync.ExitNativeUpdate();
+        return __exception;
+    }
+
+    [HarmonyPostfix, HarmonyPatch(typeof(GadgetRoadrunner), nameof(GadgetRoadrunner.StartMeasure))]
+    private static void AfterStart(GadgetRoadrunner __instance) => RoadrunnerActionSync.SendObserved(__instance, RoadrunnerAction.Start);
+
+    [HarmonyPostfix, HarmonyPatch(typeof(GadgetRoadrunner), nameof(GadgetRoadrunner.Acknowledge))]
+    private static void AfterAcknowledge(GadgetRoadrunner __instance) => RoadrunnerActionSync.SendObserved(__instance, RoadrunnerAction.Acknowledge);
+}
