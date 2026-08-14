@@ -24,6 +24,7 @@ internal static class CustomizationClientJoinPatch
     [HarmonyPatch(typeof(NetworkClient), "Subscribe")]
     private static void SubscribeClient(NetworkClient __instance)
     {
+        __instance.RegisterExternalSerializablePacket<ClientboundCustomizationToolStatePacket>(CustomizationToolJoinSync.Receive);
         __instance.RegisterExternalSerializablePacket<ClientboundCustomizationStatePacket>(CustomizationSnapshotSync.Receive);
         GadgetStructuralSync.RegisterClient(__instance);
         GadgetMountSync.RegisterClient(__instance);
@@ -48,6 +49,7 @@ internal static class CustomizationClientJoinPatch
         if (newState != PlayerLoadingState.ReadyForItems || allowItems || NetworkLifecycle.Instance.IsHost())
             return true;
 
+        CustomizationToolJoinSync.BeginJoin();
         CustomizationSnapshotSync.BeginJoin();
         waiting = true;
         SendLoadStateUpdate.Invoke(__instance, new object[] { PlayerLoadingState.ReadyForCustomizers });
@@ -69,7 +71,7 @@ internal static class CustomizationClientJoinPatch
             if (waiting && !NetworkLifecycle.Instance.IsHost())
             {
                 client.Log("Waiting for customization state");
-                while (!CustomizationSnapshotSync.CustomizerStateLoaded)
+                while (!CustomizationToolJoinSync.Loaded || !CustomizationSnapshotSync.CustomizerStateLoaded)
                     yield return null;
 
                 allowItems = true;
@@ -101,15 +103,23 @@ internal static class CustomizationServerJoinPatch
         if (player.LoadingState != PlayerLoadingState.ReadyForTrainSets)
             return false;
 
+        ClientboundCustomizationToolStatePacket tools = CustomizationToolJoinSync.Build();
         ClientboundCustomizationStatePacket snapshot = CustomizationSnapshotSync.Build();
         uint tick = NetworkLifecycle.Instance.Tick;
+
+        foreach (var toolState in tools.Items)
+        {
+            if (toolState != null && NetworkedItem.TryGet(toolState.ItemNetId, out NetworkedItem item))
+                player.KnownItems[item] = tick;
+        }
         foreach (GadgetPlacementState placement in snapshot.Gadgets)
         {
             if (placement?.Item != null && NetworkedItem.TryGet(placement.Item.ItemNetId, out NetworkedItem item))
                 player.KnownItems[item] = tick;
         }
 
-        __instance.Log($"Sending customization state to {player.Username}: {snapshot.Gadgets.Count} gadgets, {snapshot.Mounts.Count} mounts, {snapshot.Wires.Count} wires, {snapshot.Snaps.Count} snaps, {snapshot.Holes.Count} free holes");
+        __instance.Log($"Sending customization state to {player.Username}: {tools.Items.Count} tool items, {snapshot.Gadgets.Count} gadgets, {snapshot.Mounts.Count} mounts, {snapshot.Wires.Count} wires, {snapshot.Snaps.Count} snaps, {snapshot.Holes.Count} free holes");
+        CustomizationPacketSend.SendJoinState(__instance, peer, tools);
         CustomizationPacketSend.SendJoinState(__instance, peer, snapshot);
         player.LoadingState = PlayerLoadingState.ReadyForCustomizers;
         return false;
