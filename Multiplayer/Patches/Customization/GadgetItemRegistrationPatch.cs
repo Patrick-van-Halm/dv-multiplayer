@@ -9,8 +9,6 @@ using Multiplayer.Components.Networking.Customization;
 using Multiplayer.Components.Networking.Customization.Gadgets;
 using Multiplayer.Components.Networking.World;
 using Multiplayer.Networking.Data.Customization;
-using Multiplayer.Networking.Managers.Client;
-using Multiplayer.Networking.Managers.Server;
 using System;
 using UnityEngine;
 
@@ -134,30 +132,4 @@ internal static class GadgetSnapObservationPatch
             SnapPointIndex = pointIndex,
         });
     }
-}
-
-[HarmonyPatch]
-internal static class RoadrunnerObservationPatch
-{
-    [HarmonyPrefix, HarmonyPatch(typeof(GadgetRoadrunner), "Update")]
-    private static void BeforeUpdate() => RoadrunnerSync.EnterNativeUpdate();
-
-    [HarmonyFinalizer, HarmonyPatch(typeof(GadgetRoadrunner), "Update")]
-    private static Exception AfterUpdate(Exception __exception)
-    {
-        RoadrunnerSync.ExitNativeUpdate();
-        return __exception;
-    }
-
-    [HarmonyPostfix, HarmonyPatch(typeof(GadgetRoadrunner), nameof(GadgetRoadrunner.StartMeasure))]
-    private static void AfterStart(GadgetRoadrunner __instance) => RoadrunnerSync.SendObserved(__instance, RoadrunnerSyncAction.Start);
-
-    [HarmonyPostfix, HarmonyPatch(typeof(GadgetRoadrunner), nameof(GadgetRoadrunner.Acknowledge))]
-    private static void AfterAcknowledge(GadgetRoadrunner __instance) => RoadrunnerSync.SendObserved(__instance, RoadrunnerSyncAction.Acknowledge);
-
-    [HarmonyPostfix, HarmonyPatch(typeof(NetworkClient), "Subscribe")]
-    private static void SubscribeClient(NetworkClient __instance) => RoadrunnerSync.RegisterClient(__instance);
-
-    [HarmonyPostfix, HarmonyPatch(typeof(NetworkServer), "Subscribe")]
-    private static void SubscribeServer(NetworkServer __instance) => RoadrunnerSync.RegisterServer(__instance);
 }
