@@ -1,6 +1,7 @@
 using DV.Customization.Gadgets;
 using HarmonyLib;
 using Multiplayer.Components.Networking;
+using Multiplayer.Components.Networking.Customization;
 using Multiplayer.Components.Networking.World;
 using Multiplayer.Networking.Data;
 using Multiplayer.Networking.Managers.Server;
@@ -21,9 +22,6 @@ internal static class InstalledGadgetItemStatePatch
         if (__instance?.Item?.GetComponent<GadgetItem>()?.Gadget?.IsLinked != true)
             return;
 
-        // Placement/removal is synchronized by the native customization action. Keep the
-        // hidden GadgetItem shell from being reinterpreted as a dropped world item while
-        // still allowing its tracked gadget values through the normal item snapshot path.
         StateDirty?.SetValue(__instance, false);
         LastState?.SetValue(__instance, ItemState.Dropped);
     }
