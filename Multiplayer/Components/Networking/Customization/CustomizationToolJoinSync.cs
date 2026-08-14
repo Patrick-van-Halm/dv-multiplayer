@@ -86,10 +86,31 @@ internal static class CustomizationToolJoinSync
 
     private static IEnumerator WaitForItems(ClientboundCustomizationToolStatePacket packet)
     {
-        while (packet.Items.Any(item => item != null && item.ItemNetId != 0 && !NetworkedItem.TryGet(item.ItemNetId, out _)))
+        while (!ItemsAndRelationshipsReady(packet))
             yield return null;
 
         loaded = true;
+    }
+
+    private static bool ItemsAndRelationshipsReady(ClientboundCustomizationToolStatePacket packet)
+    {
+        foreach (ItemUpdateData itemState in packet.Items)
+        {
+            if (itemState == null || itemState.ItemNetId == 0)
+                continue;
+            if (!NetworkedItem.TryGet(itemState.ItemNetId, out NetworkedItem networkedItem) || networkedItem?.Item == null)
+                return false;
+
+            if (itemState.States == null || !itemState.States.TryGetValue("soldering.spool", out object spoolValue) ||
+                spoolValue is not uint expectedSpool)
+                continue;
+
+            GadgetSolderingTool tool = networkedItem.Item.GetComponent<GadgetSolderingTool>();
+            if (tool != null && SolderingMagazineSync.GetSpoolNetId(tool) != expectedSpool)
+                return false;
+        }
+
+        return true;
     }
 
     private static void AddCurrentItem(ClientboundCustomizationToolStatePacket packet, HashSet<ushort> added, NetworkedItem item)
