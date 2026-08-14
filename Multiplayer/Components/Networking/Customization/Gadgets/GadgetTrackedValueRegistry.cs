@@ -38,7 +38,6 @@ public static class GadgetTrackedValueRegistry
             {
                 int pi = pointIndex;
                 string prefix = $"drill.{componentIndex}.{pointIndex}";
-
                 item.RegisterTrackedValue($"{prefix}.state", () => (int)drillable.GetMountPointState(pi),
                     value => drillable.SetMountPointState(pi, (MountPoint.States)value));
                 item.RegisterTrackedValue($"{prefix}.glass", () => drillable.GetMountPoint(pi).IsOnGlass,
@@ -130,10 +129,12 @@ public static class GadgetTrackedValueRegistry
                     }, (_, _) => false, true);
                 }
                 if (SetRoadrunnerCompleted != null)
-                {
                     item.RegisterTrackedValue("gadget.roadrunner.completed", () => roadRunner.HasCompleted,
                         value => SetRoadrunnerCompleted.Invoke(roadRunner, new object[] { value }), (_, _) => false, true);
-                }
+                break;
+            case GadgetSwitch gadgetSwitch:
+                item.RegisterTrackedValue("gadget.switch.value", () => gadgetSwitch.RawOutputValue,
+                    gadgetSwitch.SetOutputValue);
                 break;
         }
     }
