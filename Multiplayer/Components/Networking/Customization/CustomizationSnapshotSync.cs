@@ -43,13 +43,16 @@ internal static class CustomizationSnapshotSync
         {
             if (networkedItem == null || networkedItem.NetId == 0 || networkedItem.Item == null)
                 continue;
+
             GadgetItem gadgetItem = networkedItem.Item.GetComponent<GadgetItem>();
             GadgetBase gadget = gadgetItem?.Gadget;
             if (gadget == null || !gadget.IsLinked || gadget.Custom == null || !CustomizationRef.TryFrom(gadget.Custom, out CustomizationRef target))
                 continue;
+
             ItemUpdateData itemState = networkedItem.CreateUpdateData(ItemUpdateData.ItemUpdateType.FullSync);
             if (itemState == null)
                 continue;
+
             itemState.UpdateType = ItemUpdateData.ItemUpdateType.Create;
             itemState.ItemState = ItemState.Dropped;
             itemState.ItemPosition = gadget.transform.position - WorldMover.currentMove;
@@ -62,6 +65,8 @@ internal static class CustomizationSnapshotSync
                 LocalRotation = gadget.transform.localRotation,
                 IsOnGlass = gadget.IsOnGlass,
             });
+
+            Multiplayer.LogDebug(() => $"[Customization] Gadget {networkedItem.NetId} {gadget.GetType().Name} target {target.Kind}:{target.TrainCarNetId} linked={gadget.IsLinked} pos={gadget.transform.localPosition} rot={gadget.transform.localRotation.eulerAngles} solder={gadget.SolderingProgressUnits} values=[{string.Join(", ", itemState.States?.Select(value => $"{value.Key}={value.Value}") ?? Enumerable.Empty<string>())}]");
         }
 
         GadgetMountSync.AppendSnapshot(packet);
@@ -84,6 +89,15 @@ internal static class CustomizationSnapshotSync
                 });
             }
         }
+
+        Multiplayer.LogDebug(() => $"[Customization] Snapshot gadgets={packet.Gadgets.Count} mounts={packet.Mounts.Count} wires={packet.Wires.Count} snaps={packet.Snaps.Count} holes={packet.Holes.Count}");
+        foreach (GadgetMountState mount in packet.Mounts)
+            Multiplayer.LogDebug(() => $"[Customization] Mount owner={mount.MountOwnerItemNetId} index={mount.MountIndex} mounted={mount.MountedItemNetId}");
+        foreach (GadgetWireState wire in packet.Wires)
+            Multiplayer.LogDebug(() => $"[Customization] Wire {wire.GadgetAItemNetId}:{wire.PortAIndex} <-> {wire.GadgetBItemNetId}:{wire.PortBIndex}");
+        foreach (GadgetSnapState snap in packet.Snaps)
+            Multiplayer.LogDebug(() => $"[Customization] Snap gadget={snap.TargetGadgetItemNetId} point={snap.SnapPointIndex} item={snap.AttachedItemNetId} sliding={snap.HasSlidingAnchor} anchor={snap.SlidingAnchorLocalPosition}");
+
         return packet;
     }
 
@@ -97,6 +111,7 @@ internal static class CustomizationSnapshotSync
     {
         if (snapshotApplying)
             yield break;
+
         snapshotApplying = true;
         customizerStateLoaded = false;
         try
@@ -106,6 +121,7 @@ internal static class CustomizationSnapshotSync
             {
                 if (placement?.Item == null || placement.Item.ItemNetId == 0)
                     continue;
+
                 ItemUpdateData create = CloneWithoutStates(placement.Item);
                 create.UpdateType = ItemUpdateData.ItemUpdateType.Create;
                 create.ItemState = ItemState.Dropped;
@@ -122,6 +138,7 @@ internal static class CustomizationSnapshotSync
                 {
                     if (placement?.Item == null || !placement.Target.TryResolve(out Customization target) || !TryGetGadget(placement.Item.ItemNetId, out GadgetItem gadgetItem, out GadgetBase gadget))
                         continue;
+
                     if (!gadget.IsLinked)
                         GadgetItem.Place(target, placement.LocalPosition, placement.LocalRotation, gadgetItem, null);
                     else if (gadget.Custom == target)
@@ -156,6 +173,7 @@ internal static class CustomizationSnapshotSync
             {
                 if (placement?.Item?.States == null || placement.Item.States.Count == 0 || !NetworkedItem.TryGet(placement.Item.ItemNetId, out NetworkedItem networkedItem))
                     continue;
+
                 networkedItem.ReceiveSnapshot(new ItemUpdateData
                 {
                     UpdateType = ItemUpdateData.ItemUpdateType.ObjectState,
@@ -163,6 +181,7 @@ internal static class CustomizationSnapshotSync
                     States = new Dictionary<string, object>(placement.Item.States),
                 });
             }
+
             customizerStateLoaded = true;
         }
         finally
