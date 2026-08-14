@@ -78,7 +78,7 @@ internal static class SolderingMagazineSync
         if (NetworkLifecycle.Instance.IsHost())
             BroadcastCanonical(NetworkLifecycle.Instance.Server, packet, null);
         else
-            NetworkLifecycle.Instance.Client.SendExternalSerializablePacketToServer(packet, true);
+            CustomizationPacketSend.SendToServer(NetworkLifecycle.Instance.Client, packet);
     }
 
     public static void ObserveDropEmptySpool(GadgetSolderingTool tool)
@@ -90,7 +90,7 @@ internal static class SolderingMagazineSync
         if (NetworkLifecycle.Instance.IsHost())
             BroadcastDrop(NetworkLifecycle.Instance.Server, packet, null);
         else
-            NetworkLifecycle.Instance.Client.SendExternalSerializablePacketToServer(packet, true);
+            CustomizationPacketSend.SendToServer(NetworkLifecycle.Instance.Client, packet);
     }
 
     private static void OnServerMagazine(NetworkServer server, SolderingMagazinePacket packet, IPlayer sender)
@@ -98,8 +98,9 @@ internal static class SolderingMagazineSync
         if (packet == null || !TryGetTool(packet.ToolItemNetId, out GadgetSolderingTool tool))
             return;
 
+        bool senderReplacedLocally = packet.SpoolItemNetId == 0;
         NetworkedItem canonicalSpool;
-        if (packet.SpoolItemNetId == 0)
+        if (senderReplacedLocally)
         {
             if (!ReplaceFullSpoolWithSpent(tool, out canonicalSpool))
                 return;
@@ -115,7 +116,7 @@ internal static class SolderingMagazineSync
             return;
         }
 
-        BroadcastCanonical(server, packet, sender, canonicalSpool);
+        BroadcastCanonical(server, packet, sender, canonicalSpool, senderReplacedLocally);
     }
 
     private static void OnServerDrop(NetworkServer server, SolderingDropEmptySpoolPacket packet, IPlayer sender)
@@ -143,6 +144,19 @@ internal static class SolderingMagazineSync
             return true;
         }
 
+        GameObject current = magazine[0];
+        if (current != null)
+        {
+            MagazineAmmo currentAmmo = current.GetComponent<MagazineAmmo>();
+            ItemBase currentItem = current.GetComponent<ItemBase>();
+            if (currentAmmo?.isSpent == true && currentItem != null &&
+                NetworkedItem.TryGetNetworkedItem(currentItem, out NetworkedItem localReplacement) && localReplacement.NetId == 0)
+            {
+                localReplacement.NetId = spoolNetId;
+                return true;
+            }
+        }
+
         if (!NetworkedItem.TryGet(spoolNetId, out NetworkedItem spool) || spool?.Item == null)
             return false;
         if (magazine[0] == spool.Item.gameObject)
@@ -152,7 +166,7 @@ internal static class SolderingMagazineSync
 
         using (CustomizationSyncScope.Remote())
         {
-            GameObject current = magazine[0];
+            current = magazine[0];
             if (current != null)
             {
                 ItemBase currentItem = current.GetComponent<ItemBase>();
@@ -210,7 +224,8 @@ internal static class SolderingMagazineSync
             tool.DropEmptySpool();
     }
 
-    private static void BroadcastCanonical(NetworkServer server, SolderingMagazinePacket packet, IPlayer sender, NetworkedItem spool = null)
+    private static void BroadcastCanonical(NetworkServer server, SolderingMagazinePacket packet, IPlayer sender,
+        NetworkedItem spool = null, bool senderReplacedLocally = false)
     {
         if (server == null || packet == null || !NetworkedItem.TryGet(packet.ToolItemNetId, out NetworkedItem toolItem))
             return;
@@ -225,8 +240,14 @@ internal static class SolderingMagazineSync
                 continue;
 
             if (spool != null)
-                EnsureKnown(server, recipient, spool);
-            server.SendExternalSerializablePacketToPlayer(packet, recipient.Peer, true);
+            {
+                if (senderReplacedLocally && recipient.Peer == senderPeer)
+                    recipient.KnownItems[spool] = NetworkLifecycle.Instance.Tick;
+                else
+                    EnsureKnown(server, recipient, spool);
+            }
+
+            CustomizationPacketSend.SendJoinState(server, recipient.Peer, packet);
         }
     }
 
@@ -241,7 +262,7 @@ internal static class SolderingMagazineSync
             if (recipient.Peer == server.SelfPeer || recipient.Peer == senderPeer ||
                 recipient.LoadingState < PlayerLoadingState.ReadyForItems || !recipient.KnownItems.ContainsKey(toolItem))
                 continue;
-            server.SendExternalSerializablePacketToPlayer(packet, recipient.Peer, true);
+            CustomizationPacketSend.SendJoinState(server, recipient.Peer, packet);
         }
     }
 
